@@ -1,0 +1,8 @@
+output/
+output-test/
+build-cache/
+config/keystore/*.jks
+config/keystore/*.keystore
+config/keystore/keystore.properties
+sdk/*.zip
+sdk/*.tar.*

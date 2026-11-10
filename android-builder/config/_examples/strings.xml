@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  示例：放到上一级目录（config/strings.xml）才会生效。
+  一般不需要覆盖整个文件 —— 打包时会自动把 app_name 改成 -n/--name 指定的名字；
+  只有当你要加其它自定义字符串时才需要复制这个文件。
+-->
+<resources>
+    <string name="app_name">我的应用</string>
+</resources>

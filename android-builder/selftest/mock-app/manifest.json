@@ -1,0 +1,9 @@
+{
+  "name": "演示 App",
+  "appid": "",
+  "description": "",
+  "versionName": "2.0.8",
+  "versionCode": "208",
+  "app-plus": { "usingComponents": false, "titleNView": false },
+  "id": "__UNI__MOCK01"
+}

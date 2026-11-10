@@ -1,0 +1,47 @@
+# ---------------------------------------------------------------------------
+# 换行符策略
+#
+# 本项目同时有 .sh 和 .bat：
+#   .sh / gradlew 必须是 LF（CRLF 会让 bash 报 $'\r': command not found）
+#   .bat          必须是 CRLF（且是 GBK 编码，见 docs/06-踩坑清单.md）
+# 不显式声明的话，Windows 上 core.autocrlf=true 会把 .sh 检出成 CRLF 而跑不起来。
+# ---------------------------------------------------------------------------
+
+# 默认：交给 git 判定
+* text=auto eol=lf
+
+# shell / gradle wrapper：强制 LF
+*.sh                text eol=lf
+gradlew             text eol=lf
+*.gradle            text eol=lf
+Dockerfile          text eol=lf
+*.go                text eol=lf
+*.js                text eol=lf
+*.vue               text eol=lf
+*.css               text eol=lf
+*.json              text eol=lf
+*.md                text eol=lf
+*.yml               text eol=lf
+*.yaml              text eol=lf
+*.xml               text eol=lf
+.gitignore          text eol=lf
+.gitattributes      text eol=lf
+.dockerignore       text eol=lf
+
+# Windows 批处理：强制 CRLF，且不要做任何编码转换
+*.bat               text eol=crlf
+*.cmd               text eol=crlf
+
+# 二进制：显式声明，避免 git 尝试做文本 diff / 换行转换
+*.png               binary
+*.ico               binary
+*.jpg               binary
+*.jpeg              binary
+*.gif               binary
+*.zip               binary
+*.jks               binary
+*.keystore          binary
+*.aar               binary
+*.jar               binary
+*.exe               binary
+*.9.png             binary

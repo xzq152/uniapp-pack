@@ -1,0 +1,3 @@
+# Project-wide Gradle settings.
+include ':app'
+rootProject.name = 'HBuilder-Integrate-AS'

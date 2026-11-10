@@ -1,0 +1,47 @@
+# ---------------------------------------------------------------------------
+# 运行期数据与构建产物（不入仓库）
+# ---------------------------------------------------------------------------
+
+# 服务运行期数据：上传包、产物 APK、证书、图标、启动图、回收站、jobs.json
+pack-server/data/
+
+# 编译出来的二进制
+*.exe
+pack-server/uniapp-pack-server
+pack-server/启动服务
+pack-server/停止服务
+
+# 打包镜像的本地产物
+android-builder/output/
+android-builder/output-test/
+android-builder/build-cache/
+
+# ---------------------------------------------------------------------------
+# 凭据（重要：绝对不能进公开仓库）
+# ---------------------------------------------------------------------------
+# 自动生成的测试证书与明文口令配置
+android-builder/config/keystore/*.jks
+android-builder/config/keystore/*.keystore
+android-builder/config/keystore/keystore.properties
+# 但保留示例文件
+!android-builder/config/keystore/keystore.properties.example
+
+# DCloud 离线 SDK（需自行下载，受其许可限制，不入仓库）
+android-builder/sdk/*.zip
+android-builder/sdk/*.tar.*
+android-builder/sdk/
+
+# 托盘调试留痕
+pack-server/tray-error.txt
+android-builder/tray-error.txt
+
+# ---------------------------------------------------------------------------
+# 依赖与编辑器
+# ---------------------------------------------------------------------------
+node_modules/
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.log

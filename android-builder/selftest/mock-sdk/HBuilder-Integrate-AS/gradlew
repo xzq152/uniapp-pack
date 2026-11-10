@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# 假的 gradlew：不联网下载 Gradle、不真正编译，只用来验证打包流程是否跑通
+# （真实场景由 DCloud 离线 SDK 自带的 gradlew 负责）
+set -euo pipefail
+
+HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+ARGS=("$@")
+TASK="assembleRelease"
+for a in "${ARGS[@]}"; do case "$a" in *:assemble*) TASK=$a ;; esac; done
+
+echo "MOCK-GRADLE  =>  task=${TASK}"
+
+APK_DIR="$HERE/app/build/outputs/apk/release"
+mkdir -p "$APK_DIR"
+{
+  printf 'PK\003\004 mock-apk\n'
+  printf 'generated-at: %s\n' "$(date '+%Y-%m-%d %H:%M:%S')"
+} > "$APK_DIR/app-release-unsigned.apk"
+cp -f "$APK_DIR/app-release-unsigned.apk" "$APK_DIR/app-release.apk"
+
+echo "BUILD SUCCESSFUL in 1s"

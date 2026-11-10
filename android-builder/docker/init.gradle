@@ -1,0 +1,50 @@
+// 国内 Maven 镜像，由 entrypoint.sh 在 USE_CN_MIRROR=1（默认）时通过 -I 注入
+// 作用：让 Gradle 从阿里云拉取 AGP / AndroidX / 第三方库，避免 network timeout
+def CN = "https://maven.aliyun.com/repository"
+
+def addRepos = { repoHandler ->
+    repoHandler.maven { url "${CN}/google";         name = "aliyun-google" }
+    repoHandler.maven { url "${CN}/central";        name = "aliyun-central" }
+    repoHandler.maven { url "${CN}/gradle-plugin";  name = "aliyun-plugin" }
+    repoHandler.maven { url "${CN}/public";         name = "aliyun-public" }
+    repoHandler.mavenCentral()
+    repoHandler.google()
+}
+
+// 1) settings.gradle 里的 dependencyResolutionManagement / pluginManagement
+try {
+    gradle.settingsEvaluated { settings ->
+        try {
+            def dm = settings.dependencyResolutionManagement
+            dm.repositories { addRepos(delegate) }
+            dm.repositoriesMode.set(org.gradle.api.initialization.resolve.RepositoriesMode.PREFER_SETTINGS)
+        } catch (Throwable ignored) {}
+        try {
+            settings.pluginManagement.repositories { addRepos(delegate) }
+        } catch (Throwable ignored) {}
+    }
+} catch (Throwable t) {
+    println "[init.gradle] settingsEvaluated hook 未生效: ${t.message}"
+}
+
+// 2) 根工程 buildscript（AGP / gradle 插件 classpath）
+try {
+    gradle.projectsLoaded { g ->
+        try {
+            g.rootProject.buildscript { repositories { addRepos(delegate) } }
+        } catch (Throwable ignored) {}
+    }
+} catch (Throwable t) {
+    println "[init.gradle] projectsLoaded hook 未生效: ${t.message}"
+}
+
+// 3) 各子工程依赖仓库
+try {
+    allprojects { p ->
+        try { addRepos(p.repositories) } catch (Throwable ignored) {}
+    }
+} catch (Throwable t) {
+    println "[init.gradle] allprojects hook 未生效: ${t.message}"
+}
+
+println "[init.gradle] 已启用阿里云 Maven 镜像（设置 USE_CN_MIRROR=0 可关闭）"

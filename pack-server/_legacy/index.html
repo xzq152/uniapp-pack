@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>uni-app 安卓打包服务</title>
+<link rel="stylesheet" href="/static/style.css?v=5">
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <h1>uni-app 安卓打包服务</h1>
+    <div class="env">镜像 <b id="envImage">-</b> · Docker 内存 <b id="envMem">-</b></div>
+    <button class="btn sm ghost" id="btnLogout" hidden>退出</button>
+  </header>
+
+  <!-- 环境开关 -->
+  <section class="card" id="cardEnv">
+    <div class="envrow">
+      <span class="dot" id="envDot"></span>
+      <div class="envtext">
+        <div class="envtitle" id="envText">检查环境…</div>
+        <div class="envsub" id="envSub">正在读取 Docker 状态</div>
+      </div>
+      <div class="envbtns">
+        <button class="btn sm primary" id="btnStart" hidden>启动环境</button>
+        <button class="btn sm" id="btnRestart" hidden>重启</button>
+        <button class="btn sm" id="btnStop" hidden>停止</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- 未启动时的占位 -->
+  <section class="card empty-env" id="cardEmpty" hidden>
+    <div class="empty-icon">⏸</div>
+    <div class="empty-title">打包环境已停止</div>
+    <div class="empty-sub">容器未运行不占内存。需要打包时点上面的「启动环境」，约 2 秒。</div>
+  </section>
+
+  <div id="packArea" hidden>
+    <!-- 1. 上传 -->
+    <section class="card">
+      <h2><span class="step">1</span>上传资源包</h2>
+      <div class="drop" id="drop">
+        <div class="big">点击选择，或把文件拖到这里</div>
+        <div class="sub">支持 HBuilderX 生成的 __UNI__XXXX.zip 本地打包资源，或 uni-app 源码 zip</div>
+        <div class="file" id="fileName"></div>
+      </div>
+      <input type="file" id="file" accept=".zip" hidden>
+      <div class="upbar" id="upBar"><i></i></div>
+      <div class="upmeta" id="upMeta"></div>
+    </section>
+
+    <!-- 2. 配置 -->
+    <section class="card">
+      <h2><span class="step">2</span>填写打包信息</h2>
+      <div class="grid">
+        <div class="field">
+          <label>应用名称</label>
+          <input id="fName" placeholder="容通助手">
+        </div>
+        <div class="field">
+          <label>包名 applicationId <span class="req">*</span></label>
+          <input id="fPkg" placeholder="com.rongtong2024.app" spellcheck="false">
+          <div class="err" id="ePkg"></div>
+        </div>
+        <div class="field">
+          <label>版本名 versionName
+            <button class="lnk" id="btnBump" type="button" title="按同包名的上一次记录 +1">上次 +1</button>
+          </label>
+          <input id="fVName" placeholder="2.0.8">
+          <div class="err" id="eVName"></div>
+        </div>
+        <div class="field">
+          <label>版本号 versionCode</label>
+          <input id="fVCode" placeholder="208" inputmode="numeric">
+          <div class="err" id="eVCode"></div>
+        </div>
+        <div class="field">
+          <label>appid</label>
+          <input id="fAppId" placeholder="__UNI__XXXXXXX">
+        </div>
+        <div class="field">
+          <label>上传的资源包</label>
+          <input id="fSrc" disabled value="尚未上传">
+        </div>
+
+        <div class="field full">
+          <label>离线打包 appkey <span class="req">*</span></label>
+          <input id="fAppKey" placeholder="粘贴 DCloud 控制台的 Android 离线打包 key" spellcheck="false">
+          <div class="hint">
+            不填真机会提示「appkey未配置或配置错误」。获取：dev.dcloud.net.cn → 应用 →
+            各平台信息 → Android → 离线打包 key（须与本 appid 对应）
+          </div>
+        </div>
+
+        <div class="field full">
+          <label>应用图标</label>
+          <input type="file" id="fIcon" accept=".png">
+          <div class="hint" id="iconHint">默认使用资源包内 static/app_icons 里最大的一张，可在这里覆盖</div>
+        </div>
+
+        <div class="field full">
+          <label>启动图</label>
+          <div class="hint">自动用上面的图标合成 1080×1920（图标居中、底色取图标四角颜色）；
+            想用设计好的开屏图，可放到 config/branding/splash.png</div>
+        </div>
+
+        <div class="field full">
+          <label>签名证书</label>
+          <div class="radios">
+            <label><input type="radio" name="ks" value="auto" checked> 自动生成测试证书</label>
+            <label><input type="radio" name="ks" value="saved"> 使用已有证书</label>
+            <label><input type="radio" name="ks" value="new"> 上传新证书</label>
+          </div>
+          <div class="hint" id="ksHint">测试证书仅供调试，正式发版请使用自己的 jks</div>
+        </div>
+      </div>
+
+      <div class="subbox" id="boxSaved" hidden>
+        <div class="grid">
+          <div class="field full">
+            <label>选择证书</label>
+            <select id="fKs"></select>
+          </div>
+        </div>
+      </div>
+
+      <div class="subbox" id="boxNew" hidden>
+        <div class="grid">
+          <div class="field full">
+            <label>证书文件 (.jks / .keystore)</label>
+            <input type="file" id="fKsFile" accept=".jks,.keystore">
+          </div>
+          <div class="field">
+            <label>证书名称</label>
+            <input id="fKsName" placeholder="公司正式证书">
+          </div>
+          <div class="field">
+            <label>别名 keyAlias</label>
+            <input id="fKsAlias" placeholder="key0">
+          </div>
+          <div class="field">
+            <label>库密码 storePassword</label>
+            <input id="fKsStore" type="password" placeholder="123456">
+          </div>
+          <div class="field">
+            <label>密钥密码 keyPassword</label>
+            <input id="fKsKey" type="password" placeholder="留空则同库密码">
+          </div>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button class="btn primary" id="btnSubmit" disabled>开始打包</button>
+        <span class="note" id="submitNote">请先上传资源包并填写包名</span>
+      </div>
+    </section>
+
+    <!-- 3. 进度 -->
+    <section class="card" id="cardRun" hidden>
+      <h2><span class="step">3</span>构建进度
+        <span class="count" id="runTitle"></span>
+      </h2>
+      <div class="prow">
+        <span class="pct" id="pPct">0%</span>
+        <span class="stage" id="pStage">准备中</span>
+        <span id="pBadge"></span>
+      </div>
+      <div class="bar" id="pBar"><i></i></div>
+      <div class="log" id="pLog"></div>
+      <div class="logbar">
+        <button class="btn sm ghost" id="btnCopyLog">复制日志</button>
+        <a class="btn sm ghost" id="btnDlLog" href="#" download>下载日志</a>
+        <span class="note" id="logNote"></span>
+      </div>
+    </section>
+  </div>
+
+  <!-- 4. 历史 -->
+  <section class="card">
+    <h2><span class="step">4</span>打包记录
+      <span class="count" id="jobsCount"></span>
+    </h2>
+
+    <div class="toolbar">
+      <input id="q" placeholder="搜索 应用 / 包名 / 版本">
+      <select id="fStatus">
+        <option value="">全部状态</option>
+        <option value="done">完成</option>
+        <option value="failed">失败</option>
+        <option value="running">构建中</option>
+      </select>
+      <button class="btn sm ghost" id="btnTrash">回收站 <span id="trashCount"></span></button>
+    </div>
+
+    <table class="jobs">
+      <thead>
+        <tr>
+          <th>应用</th>
+          <th>版本 / 包名</th>
+          <th class="sortable" id="thTime" title="点击切换排序方向">时间 <span class="arrow" id="sortArrow">↓</span></th>
+          <th>状态</th>
+          <th style="text-align:right">操作</th>
+        </tr>
+      </thead>
+      <tbody id="jobsBody"></tbody>
+    </table>
+    <div class="empty" id="jobsEmpty">暂无记录</div>
+    <div class="more"><button class="btn sm" id="btnMore" hidden>显示更多</button></div>
+
+    <div class="trashbox" id="trashPanel" hidden>
+      <div class="trashhead">回收站 · 保留 7 天
+        <button class="btn sm ghost" id="btnTrashClose">收起</button>
+      </div>
+      <div id="trashList"></div>
+    </div>
+
+    <div class="dlmeta" id="dlMeta" hidden></div>
+  </section>
+
+  <footer class="foot">局域网内部工具 · 请勿暴露到公网</footer>
+</div>
+
+<script src="/static/app.js?v=5"></script>
+</body>
+</html>

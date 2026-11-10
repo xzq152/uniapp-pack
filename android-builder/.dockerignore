@@ -1,0 +1,13 @@
+**/.git
+**/.gitignore
+**/node_modules
+.gitkeeper
+build-cache
+selftest
+config
+output
+output-test
+**/*.apk
+README.md
+pack.sh
+build-image.sh
