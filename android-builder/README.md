@@ -37,7 +37,7 @@ sdk/Android-SDK@4.xx.xxxxx.zip      # 文件名随意，识别到 HBuilder-Integ
 
 ### 2. Docker
 
-已实测环境：Docker Desktop 29.x（Linux container / amd64），构建产物约 **2.3GB**，建议分给 Docker ≥ 8GB 内存、留 ≥ 15GB 磁盘。
+需要 Docker Desktop 4.x（Linux container / amd64），构建出的镜像约 **2.3GB**，建议分给 Docker ≥ 8GB 内存、留 ≥ 15GB 磁盘。
 
 **内存是硬门槛**：Android 打包（尤其 dex / 资源优化阶段）很吃内存。低于 4GB 时 Gradle daemon 会被系统 OOM 杀掉，
 且报错极其有误导性（`Gradle build daemon disappeared unexpectedly`，看不出是内存问题）。
