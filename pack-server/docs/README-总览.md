@@ -26,23 +26,45 @@
 
 ---
 
-## 快速开始（换一台机器）
+## 环境要求
+
+**Docker 是硬性前提**，不只是「装了就行」，还需要足够的资源：
+
+| 依赖 | 版本 | 说明 |
+|---|---|---|
+| **Docker Desktop** | 4.x（WSL2 后端） | 跑打包容器。**必须启动 Docker Desktop 引擎**，仅安装不够 |
+| — Docker 内存 | **≥ 6GB（推荐 8GB）** | Gradle 峰值吃 3~4GB。给小了会 OOM，且报错极具误导性（`Gradle build daemon disappeared unexpectedly`） |
+| — Docker 磁盘 | **≥ 15GB** | 打包镜像约 3GB + Gradle 缓存 |
+| **Go** | **1.22+** | 编译服务与托盘宿主 |
+| **Node.js** | **18+** | 构建前端（Vite） |
+| **浏览器** | Chrome / Edge | 上传文件夹依赖 `webkitdirectory`，Firefox 不行 |
+
+> 另外还需要 **DCloud 安卓离线 SDK**（需登录 DCloud 官网手动下载），
+> 详见 [docs/01-环境与依赖.md](docs/01-环境与依赖.md)。这一步无法自动化。
+
+自检一遍：
 
 ```bash
-# 1) 环境：Go 1.22+、Node 18+、Docker Desktop（WSL2）
-#    详细要求见 docs/01-环境与依赖.md
-
-# 2) 先构建打包镜像（约 3GB，首次较慢）
-cd android-builder && ./build-image.sh
-
-# 3) 再构建服务（前端 + Go + 启动器）
-cd ../pack-server && build.bat        # Windows 双击即可
-
-# 4) 运行
-双击 启动服务.exe     # 无窗口，右下角托盘常驻；双击托盘图标打开页面
+docker info --format '{{.ServerVersion}} {{.DockerRootDir}}'   # 引擎在跑
+go version                                                     # 1.22+
+node -v                                                        # 18+
 ```
 
-打开 <http://127.0.0.1:8080>，点右上「启动环境」后即可上传打包。
+---
+
+## 快速开始
+
+```bash
+# 1) 构建打包镜像（约 3GB，首次 10~20 分钟）
+cd android-builder && ./build-image.sh
+
+# 2) 构建服务（前端 → 嵌入二进制 → 服务 + 启动器）
+cd ../pack-server && build.bat        # Windows 双击即可
+```
+
+然后**双击 `启动服务.exe`**——无窗口，右下角托盘常驻，双击托盘图标打开页面。
+
+打开 <http://127.0.0.1:8080>，点右上角「启动环境」，即可上传资源包开始打包。
 
 ---
 
