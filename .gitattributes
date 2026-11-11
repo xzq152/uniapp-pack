@@ -32,6 +32,10 @@ Dockerfile          text eol=lf
 *.bat               text eol=crlf
 *.cmd               text eol=crlf
 
+# PowerShell：Windows 原生脚本用 CRLF
+*.ps1               text eol=crlf
+*.psm1              text eol=crlf
+
 # 二进制：显式声明，避免 git 尝试做文本 diff / 换行转换
 *.png               binary
 *.ico               binary

@@ -48,7 +48,27 @@ sdk/Android-SDK@4.xx.xxxxx.zip      # 文件名随意，识别到 HBuilder-Integ
 
 > 如果不想改内存设置，可以加 `--cp` 走 docker cp 传文件（见下），能省掉挂载开销，但编译本身仍需内存。
 
-## 快速开始（最省事的三种方式）
+## 快速开始（按你的环境选一种）
+
+### 0. 只要 Docker：`pack.ps1`（Windows 纯命令行，**无需 Go / Node / Git Bash**）
+
+这是**唯一只依赖 Docker 的入口**。宿主机上不用装 Go、不用装 Node、不用装 Git Bash，
+装好 Docker Desktop 就能出包：
+
+```powershell
+# 构建镜像（只需一次）
+.\build-image.bat
+
+# 打包
+.\pack.ps1 D:\pkg\__UNI__6744715 -Package com.demo.app -Name "我的App" -Version 2.0.8
+```
+
+参数和 `pack.sh` 基本一一对应（`-Package` / `-Name` / `-Version` / `-Sdk` / `-Cp` …），
+运行 `.\pack.ps1 -Help` 看完整列表。需要 PowerShell 5.1+（Windows 10/11 自带）。
+
+> **为什么单独做这个**：`pack.sh` 需要 bash，Windows 上得先装 Git for Windows；
+> `pack.bat` 只是转发给 `pack.sh`，同样逃不掉这个依赖。`pack.ps1` 用 PowerShell
+> 直接拼 `docker run` 参数，把宿主机依赖压到只剩 Docker。
 
 ### A. Windows 双击 / 命令行：`pack.bat`
 
@@ -57,7 +77,8 @@ pack.bat                                   :: 交互式，把资源目录拖进�
 pack.bat D:\pkg\__UNI__6744715 -p com.demo.app -n "我的App" -v 2.0.8
 pack.bat --doctor                          :: 环境自检
 ```
-它会自动找 Git Bash 并转发给 `pack.sh`。
+它会自动找 Git Bash 并转发给 `pack.sh`（**需要装 Git for Windows**；
+不想装就用上面的 `pack.ps1`）。
 
 ### B. Git Bash / macOS / Linux：`pack.sh`
 
@@ -65,13 +86,17 @@ pack.bat --doctor                          :: 环境自检
 ./pack.sh ../my-uniapp-project -p com.demo.app -n "演示 App"
 ```
 
-### C. 挂载卡住时：`--cp`
+### C. 挂载卡住时：`--cp` / `-Cp`
 
-Windows 上首次 bind mount 有时要等很久（甚至几十分钟），加 `--cp` 就完全不挂载，
-改用 `docker create` + `docker cp` 传文件，速度稳定，实测同样能出包：
+Windows 上首次 bind mount 有时要等很久（甚至几十分钟），加 `--cp`（PowerShell 用 `-Cp`）
+就完全不挂载，改用 `docker create` + `docker cp` 传文件，速度稳定，实测同样能出包：
 
 ```bash
 ./pack.sh --cp ../__UNI__6744715.zip -p com.demo.app -n "演示 App"
+```
+
+```powershell
+.\pack.ps1 .\__UNI__6744715.zip -Package com.demo.app -Cp
 ```
 
 ---
@@ -80,7 +105,7 @@ Windows 上首次 bind mount 有时要等很久（甚至几十分钟），加 `-
 
 ```bash
 # 1) 构建镜像（sdk/ 为空也能构建，只是运行时要用 -s 挂载 SDK）
-./build-image.sh
+./build-image.sh                  # Windows 纯 Docker 环境用 .\build-image.bat
 
 # 2) 跑一次自检：用假的 gradlew 验证全流程是否贯通（不联网、不真编译）
 bash selftest/run.sh
@@ -117,8 +142,11 @@ docker run --rm -e TZ=Asia/Shanghai -e APP_PACKAGE=com.demo.app -e APP_NAME="演
 ```
 uniapp-android-builder/
 ├── Dockerfile            # 环境：JDK17 + Android SDK + Node/pnpm + 打包脚本
-├── build-image.sh        # 构建镜像
-├── pack.sh               # 宿主机一键打包（唯一日常要用的东西）
+├── build-image.sh        # 构建镜像（Bash）
+├── build-image.bat       # 构建镜像（Windows，只要 Docker）
+├── pack.sh               # 一键打包（Bash，日常用这个）
+├── pack.ps1              # 一键打包（Windows 纯命令行，只要 Docker）
+├── pack.bat              # 交互式入口，转发给 pack.sh（需要 Git Bash）
 ├── docker/
 │   ├── entrypoint.sh     # 容器内主流程
 │   ├── prepare-sdk.sh    # 从 DCloud SDK 里抽出工程模板并补齐 aar
@@ -128,6 +156,14 @@ uniapp-android-builder/
 ├── output/               # APK 与 build-info.json
 └── selftest/             # 离线自检：假 gradlew + 假资源
 ```
+
+### 四个入口怎么选
+
+| 你的环境 | 构建镜像 | 打包 | 宿主机需要 |
+|---|---|---|---|
+| **只有 Docker**（Windows） | `build-image.bat` | `pack.ps1` | 仅 Docker Desktop |
+| Windows + Git Bash | `build-image.bat` | `pack.bat` / `pack.sh` | Docker + Git for Windows |
+| macOS / Linux | `build-image.sh` | `pack.sh` | Docker + bash |
 
 `config/` 下**只有存在的文件才会生效**，缺失的项全部走 SDK 模板默认值：
 
@@ -154,17 +190,23 @@ uniapp-android-builder/
   --store-pass '******' --key-alias demo --key-pass '******'
 ```
 
+```powershell
+.\pack.ps1 ..\app -Package com.demo.app `
+  -Keystore .\config\keystore\app.jks `
+  -StorePass '******' -KeyAlias demo -KeyPass '******'
+```
+
 ## 环境变量
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `APP_PACKAGE` / `-p` | `com.android.uniapp.pkg` | applicationId，上架前必填 |
-| `APP_NAME` / `-n` | manifest 的 `name` | 应用名 |
-| `APP_VERSION_NAME` / `-v` | manifest 的 `versionName` | 版本名 |
-| `APP_VERSION_CODE` / `--version-code` | `1` | 版本号（整数） |
-| `APP_ID` / `--appid` | manifest 的 `id` | `__UNI__XXXXXXX` |
+| `APP_PACKAGE` / `-p` / `-Package` | `com.android.uniapp.pkg` | applicationId，上架前必填 |
+| `APP_NAME` / `-n` / `-Name` | manifest 的 `name` | 应用名 |
+| `APP_VERSION_NAME` / `-v` / `-Version` | manifest 的 `versionName` | 版本名 |
+| `APP_VERSION_CODE` / `--version-code` / `-VersionCode` | `1` | 版本号（整数） |
+| `APP_ID` / `--appid` / `-AppId` | manifest 的 `id` | `__UNI__XXXXXXX` |
 | `USE_CN_MIRROR` | `1` | 阿里云 Maven 镜像 |
-| `GRADLE_EXTRA_ARGS` | `-Dorg.gradle.jvmargs=-Xmx3072m` | 透传给 gradlew |
+| `GRADLE_EXTRA_ARGS` | 按 Docker 内存自动 | 透传给 gradlew |
 | `KEYSTORE_FILE` / `STORE_PASSWORD` / `KEY_ALIAS` / `KEY_PASSWORD` | — | 签名信息 |
 | `IMAGE` | `uniapp-android-builder:latest` | 镜像名 |
 | `GRADLE_VOLUME` / `PNPM_VOLUME` | `uniapp_gradle_cache` / `uniapp_pnpm_store` | 缓存卷名 |

@@ -52,19 +52,46 @@ node -v                                                        # 18+
 
 ---
 
-## 快速开始
+## 两种用法
+
+这个项目提供**两套入口**，按需要选：
+
+### 用法一：Web 服务（图形界面，给同事用）
+
+上传资源包 → 填表单 → 看进度 → 下载 APK，全程浏览器，同事不用装任何东西。
+需要 Go + Node 来构建服务本体。
 
 ```bash
 # 1) 构建打包镜像（约 3GB，首次 10~20 分钟）
-cd android-builder && ./build-image.sh
+cd android-builder && ./build-image.sh      # Windows 纯 Docker 环境用 .\build-image.bat
 
 # 2) 构建服务（前端 → 嵌入二进制 → 服务 + 启动器）
-cd ../pack-server && build.bat        # Windows 双击即可
+cd ../pack-server && build.bat              # Windows 双击即可
 ```
 
 然后**双击 `启动服务.exe`**——无窗口，右下角托盘常驻，双击托盘图标打开页面。
 
 打开 <http://127.0.0.1:8080>，点右上角「启动环境」，即可上传资源包开始打包。
+
+### 用法二：纯命令行（**只要 Docker**）
+
+不需要 Go、不需要 Node、不需要 Git Bash，装好 Docker Desktop 就能出包：
+
+```powershell
+.\build-image.bat                                    # 构建镜像（只需一次）
+.\pack.ps1 D:\pkg\__UNI__6744715 -Package com.demo.app -Name "我的App" -Version 2.0.8
+# → output\我的App_v2.0.8_20261111-100000.apk
+```
+
+`pack.ps1 -Help` 看全部参数；首次 bind mount 卡住时加 `-Cp`。
+macOS / Linux 用 `pack.sh`，参数一一对应。详见 [android-builder/README.md](android-builder/README.md)。
+
+| 你的环境 | 构建镜像 | 打包 | 宿主机需要 |
+|---|---|---|---|
+| **只有 Docker**（Windows） | `build-image.bat` | `pack.ps1` | 仅 Docker Desktop |
+| Windows + Git Bash | `build-image.bat` | `pack.bat` / `pack.sh` | Docker + Git for Windows |
+| macOS / Linux | `build-image.sh` | `pack.sh` | Docker + bash |
+| 图形界面（给同事） | 任一种 | Web 服务 | 额外需要 Go + Node |
 
 ---
 
