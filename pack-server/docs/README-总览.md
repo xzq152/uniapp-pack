@@ -90,4 +90,3 @@ uniapp-pack/
 ```
 
 > 运行期数据默认在服务目录下的 `data/`（可用 `DATA_DIR` 指到别的盘）。
-> 本机当前部署在 `D:\uniapp-pack-go`，`E:\uniapp-pack` 是代码归档副本。
