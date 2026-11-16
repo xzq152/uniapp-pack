@@ -43,6 +43,45 @@ cd ../pack-server && build.bat        # Windows 双击即可
 ```
 
 打开 <http://127.0.0.1:8080>，点右上「启动环境」后即可上传打包。
+打完后点完成区的「打开文件夹」，直接在本机文件管理器定位到 `data/outputs/<jobId>/`。
+
+---
+
+## 远程 Docker（Docker 不在本机）
+
+服务只走 Docker Engine 的 HTTP API，**本机不需要装 docker 命令行**，所以「服务在 A 机、Docker 在 B 机」
+完全支持：停止 / 启动 / 重建 都是直接打到 B 机的 API，行为和 Docker 在本机时一致。
+
+**在页面上切换（推荐）**
+
+顶栏状态胶囊里显示的就是当前 Docker 地址（本机显示「本机」，远程显示 `IP:端口`），点它打开切换面板：
+
+- 填地址 → 「测试连接」只试连（显示 Docker 版本与可用内存）→「切换」正式生效
+- 写法宽松：`192.168.1.23`（自动补 2375）、`192.168.1.23:2375`、`http://192.168.1.23:2375` 都认
+- 留空点「切换」= 回到本机 Docker
+- 切换**先试连，连不通就拒绝**，不会把服务打到不可用的地址上
+- 有任务在构建（`running`/`queued`）时不允许切换，避免构建中途换机器
+- 切换后写入 `data/docker.json`，**重启服务仍然生效**
+
+**用环境变量（启动时固定）**
+
+```bat
+set "DOCKER_HOST=tcp://192.168.1.23:2375"
+```
+
+> 优先级：`data/docker.json`（页面切换过的）> 环境变量 `DOCKER_HOST` > 本机 socket。
+
+**对方机器要开放 TCP 2375**
+
+- Docker Desktop：Settings → General → 勾选
+  「Expose daemon on tcp://localhost:2375 without TLS」
+- Linux：`-H tcp://0.0.0.0:2375`（无 TLS 的明文端口）
+- 防火墙放行 2375，可用 `curl http://192.168.1.23:2375/version` 自查
+
+> **安全提醒**：2375 无鉴权，等于把 Docker 控制权交出去，务必只在隔离内网使用，不要暴露到公网。
+
+> Windows 本机 Docker 走命名管道（npipe），本项目只实现了 unix socket / TCP，
+> 所以 Windows 上「本机」不可用——请填远程地址。
 
 ---
 
@@ -71,6 +110,8 @@ uniapp-pack/
 │   ├── build.go              打包流程编排（docker cp / exec / 产物收集）
 │   ├── store.go              数据层（任务、证书、回收站、清理策略）
 │   ├── runtime.go            Docker 环境管理（启动/停止/重建容器）
+│   ├── dockerapi.go          Docker Engine HTTP API 客户端（不依赖 docker CLI）
+│   ├── dockerhost.go         Docker 地址：规范化、持久化（data/docker.json）、试连
 │   ├── openfolder.go         在本机文件管理器打开产物目录
 │   ├── auth.go               访问口令（可选）
 │   ├── go.mod                module uniapp-pack-server（零第三方依赖）
@@ -91,4 +132,6 @@ uniapp-pack/
 ```
 
 > 运行期数据默认在服务目录下的 `data/`（可用 `DATA_DIR` 指到别的盘）。
+> 里面含**私钥 `.jks`、明文证书口令、DCloud appkey 和产物 APK**，已在 `.gitignore` 中排除，别提交。
+> `data/docker.json` 记录页面上切换过的 Docker 地址（优先于 `DOCKER_HOST`）。
 > 本机当前部署在 `D:\uniapp-pack-go`，`E:\uniapp-pack` 是代码归档副本。
