@@ -13,23 +13,13 @@
         :style="{ color: ok ? '#12a150' : '#d54941' }"
       />
       <div class="t">
-        <div class="n">{{ ok ? apkName : '构建失败' }}</div>
-        <div class="m">
-          {{ ok ? `${fmtBytes(apkSize)} · 可直接下载安装` : friendlyError(state.job.error) }}
-        </div>
+        <div class="n">{{ ok ? apkLabel : '构建失败' }}</div>
+        <div class="m">{{ ok ? doneMeta : friendlyError(state.job.error) }}</div>
+        <div v-if="ok && outDir" class="m path" :title="outDir">{{ outDir }}</div>
       </div>
-      <t-dropdown
-        v-if="ok && apks.length > 1"
-        trigger="click"
-        :options="apkOptions"
-        :popup-props="{ overlayInnerStyle: { minWidth: '190px' } }"
-        @click="(d) => downloadOne(d.value)"
-      >
-        <t-button theme="primary" :loading="downloading">下载 APK ({{ apks.length }})</t-button>
-      </t-dropdown>
-      <t-button v-else-if="ok" theme="primary" :loading="downloading" @click="download">下载 APK</t-button>
+      <!-- 本地构建：产物就在本机目录里，直接打开文件夹比再下载一遍更实用 -->
+      <t-button v-if="ok" theme="primary" :loading="opening" @click="openFolder">打开文件夹</t-button>
       <t-button v-else theme="primary" variant="outline" @click="retry">一键重试</t-button>
-      <t-button variant="outline" @click="resetForm">再打一个</t-button>
     </div>
   </div>
 </template>
@@ -37,9 +27,8 @@
 <script setup>
 import { computed, ref } from 'vue'
 import { MessagePlugin } from 'tdesign-vue-next'
-import { state, resetForm, retryJob, loadJobs } from '../store'
+import { state, retryJob, revealJob } from '../store'
 import { fmtBytes, friendlyError } from '../utils'
-import { fastDownload } from '../download'
 
 const finished = computed(() => ['done', 'failed'].includes(state.job.status))
 const ok = computed(() => state.job.status === 'done')
@@ -54,8 +43,9 @@ const status = computed(() => {
 })
 
 const job = computed(() => state.jobs.find((x) => x.id === state.job.id))
-const apkName = computed(() => job.value?.apk || 'APK 已生成')
+const apkLabel = computed(() => job.value?.apk || 'APK 已生成')
 const apkSize = computed(() => job.value?.apkSize || 0)
+const outDir = computed(() => job.value?.outDir || '')
 
 // 渠道包列表（老记录没有 apks 字段）
 const apks = computed(() => {
@@ -64,53 +54,25 @@ const apks = computed(() => {
   return j && j.apk ? [{ channel: '', file: j.apk, size: j.apkSize, exists: true }] : []
 })
 
-const apkOptions = computed(() => {
-  const list = apks.value
-  const opts = list.map((a) => ({
-    content: a.channel || '通用',
-    value: a.file,
-    disabled: !a.exists,
-  }))
-  if (list.length > 1) {
-    opts.unshift({ content: `全部下载（zip）`, value: '__zip__' })
-  }
-  return opts
+const doneMeta = computed(() => {
+  const n = apks.value.length
+  const extra = n > 1 ? `${n} 个渠道包 · ` : ''
+  return `${extra}${fmtBytes(apkSize.value)} · 已保存在本机`
 })
 
-async function downloadOne(file) {
-  const j = job.value
-  if (!j) return
-  if (file === '__zip__') {
-    window.open(`/api/jobs/${j.id}/zip`, '_blank')
-    return
-  }
-  const a = apks.value.find((x) => x.file === file)
-  if (!a) return
-  if (downloading.value) return
-  downloading.value = true
-  try {
-    await fastDownload(j.id, a.file, a.size)
-  } finally {
-    downloading.value = false
-  }
-}
+const opening = ref(false)
 
-const downloading = ref(false)
-
-async function download() {
-  if (downloading.value) return
-  downloading.value = true
+async function openFolder() {
+  if (opening.value) return
+  // 用 state.job.id：列表还没加载完也能打开（job.value 可能暂时是 undefined）
+  const id = state.job.id
+  if (!id) return
+  opening.value = true
   try {
-    await loadJobs()
-    const j = state.jobs.find((x) => x.id === state.job.id)
-    if (!j?.apk) return
-    if (!j.apkExists) {
-      MessagePlugin.warning('这个产物已被清理（只保留最近 5 次）')
-      return
-    }
-    await fastDownload(j.id, j.apk, j.apkSize)
+    const dir = await revealJob(id)
+    if (dir) MessagePlugin.success('已在文件管理器中打开', 2000)
   } finally {
-    downloading.value = false
+    opening.value = false
   }
 }
 
@@ -124,3 +86,14 @@ function retry() {
   retryJob(j.id)
 }
 </script>
+
+<style scoped>
+/* 产物目录只在桌面端完整显示，窄屏省略中间部分，悬停看全路径 */
+.path {
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+</style>

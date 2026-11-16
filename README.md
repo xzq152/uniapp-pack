@@ -1,6 +1,6 @@
 # uni-app 安卓本地打包服务（离线打包）
 
-局域网内使用的 uni-app Android 打包服务：同事在浏览器里 **上传资源包 → 填包名/证书 → 看进度 → 下载 APK**，
+局域网内使用的 uni-app Android 打包服务：同事在浏览器里 **上传资源包 → 填包名/证书 → 看进度 → 打开产物文件夹**，
 不需要装 HBuilderX、不需要碰命令行。底层复用一份 Docker 打包镜像（DCloud 离线 SDK + Gradle）。
 
 ---
@@ -11,7 +11,7 @@
 ┌──────────────┐   上传 zip/文件夹   ┌────────────────────────┐   docker cp / exec   ┌─────────────────────┐
 │ 局域网电脑    │ ─────────────────► │  Go 服务 :8080          │ ──────────────────► │ uniapp-pack-runtime  │
 │ 浏览器       │ ◄───────────────── │  Vue3 + TDesign 前端     │ ◄────────────────── │ 容器（离线 SDK+Gradle）│
-└──────────────┘   SSE 进度 / 下载   └────────────────────────┘   产物 APK            └─────────────────────┘
+└──────────────┘  SSE 进度 / 打开目录 └────────────────────────┘   产物 APK            └─────────────────────┘
                                             │
                                             └── 数据落盘：uploads / outputs / keystores / icons / splashes
 ```
@@ -26,72 +26,23 @@
 
 ---
 
-## 环境要求
-
-**Docker 是硬性前提**，不只是「装了就行」，还需要足够的资源：
-
-| 依赖 | 版本 | 说明 |
-|---|---|---|
-| **Docker Desktop** | 4.x（WSL2 后端） | 跑打包容器。**必须启动 Docker Desktop 引擎**，仅安装不够 |
-| — Docker 内存 | **≥ 6GB（推荐 8GB）** | Gradle 峰值吃 3~4GB。给小了会 OOM，且报错极具误导性（`Gradle build daemon disappeared unexpectedly`） |
-| — Docker 磁盘 | **≥ 15GB** | 打包镜像约 3GB + Gradle 缓存 |
-| **Go** | **1.22+** | 编译服务与托盘宿主 |
-| **Node.js** | **18+** | 构建前端（Vite） |
-| **浏览器** | Chrome / Edge | 上传文件夹依赖 `webkitdirectory`，Firefox 不行 |
-
-> 另外还需要 **DCloud 安卓离线 SDK**（需登录 DCloud 官网手动下载），
-> 详见 [docs/01-环境与依赖.md](docs/01-环境与依赖.md)。这一步无法自动化。
-
-自检一遍：
+## 快速开始（换一台机器）
 
 ```bash
-docker info --format '{{.ServerVersion}} {{.DockerRootDir}}'   # 引擎在跑
-go version                                                     # 1.22+
-node -v                                                        # 18+
+# 1) 环境：Go 1.22+、Node 18+、Docker Desktop（WSL2）
+#    详细要求见 docs/01-环境与依赖.md
+
+# 2) 先构建打包镜像（约 3GB，首次较慢）
+cd android-builder && ./build-image.sh
+
+# 3) 再构建服务（前端 + Go + 启动器）
+cd ../pack-server && build.bat        # Windows 双击即可
+
+# 4) 运行
+双击 启动服务.exe     # 无窗口，右下角托盘常驻；双击托盘图标打开页面
 ```
 
----
-
-## 两种用法
-
-这个项目提供**两套入口**，按需要选：
-
-### 用法一：Web 服务（图形界面，给同事用）
-
-上传资源包 → 填表单 → 看进度 → 下载 APK，全程浏览器，同事不用装任何东西。
-需要 Go + Node 来构建服务本体。
-
-```bash
-# 1) 构建打包镜像（约 3GB，首次 10~20 分钟）
-cd android-builder && ./build-image.sh      # Windows 纯 Docker 环境用 .\build-image.bat
-
-# 2) 构建服务（前端 → 嵌入二进制 → 服务 + 启动器）
-cd ../pack-server && build.bat              # Windows 双击即可
-```
-
-然后**双击 `启动服务.exe`**——无窗口，右下角托盘常驻，双击托盘图标打开页面。
-
-打开 <http://127.0.0.1:8080>，点右上角「启动环境」，即可上传资源包开始打包。
-
-### 用法二：纯命令行（**只要 Docker**）
-
-不需要 Go、不需要 Node、不需要 Git Bash，装好 Docker Desktop 就能出包：
-
-```powershell
-.\build-image.bat                                    # 构建镜像（只需一次）
-.\pack.ps1 D:\pkg\__UNI__6744715 -Package com.demo.app -Name "我的App" -Version 2.0.8
-# → output\我的App_v2.0.8_20261111-100000.apk
-```
-
-`pack.ps1 -Help` 看全部参数；首次 bind mount 卡住时加 `-Cp`。
-macOS / Linux 用 `pack.sh`，参数一一对应。详见 [android-builder/README.md](android-builder/README.md)。
-
-| 你的环境 | 构建镜像 | 打包 | 宿主机需要 |
-|---|---|---|---|
-| **只有 Docker**（Windows） | `build-image.bat` | `pack.ps1` | 仅 Docker Desktop |
-| Windows + Git Bash | `build-image.bat` | `pack.bat` / `pack.sh` | Docker + Git for Windows |
-| macOS / Linux | `build-image.sh` | `pack.sh` | Docker + bash |
-| 图形界面（给同事） | 任一种 | Web 服务 | 额外需要 Go + Node |
+打开 <http://127.0.0.1:8080>，点右上「启动环境」后即可上传打包。
 
 ---
 
@@ -120,6 +71,7 @@ uniapp-pack/
 │   ├── build.go              打包流程编排（docker cp / exec / 产物收集）
 │   ├── store.go              数据层（任务、证书、回收站、清理策略）
 │   ├── runtime.go            Docker 环境管理（启动/停止/重建容器）
+│   ├── openfolder.go         在本机文件管理器打开产物目录
 │   ├── auth.go               访问口令（可选）
 │   ├── go.mod                module uniapp-pack-server（零第三方依赖）
 │   ├── cmd/launcher/         托盘宿主（启动服务 + 托盘图标 + 右键菜单）
@@ -139,3 +91,4 @@ uniapp-pack/
 ```
 
 > 运行期数据默认在服务目录下的 `data/`（可用 `DATA_DIR` 指到别的盘）。
+> 本机当前部署在 `D:\uniapp-pack-go`，`E:\uniapp-pack` 是代码归档副本。

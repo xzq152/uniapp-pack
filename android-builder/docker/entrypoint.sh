@@ -62,6 +62,19 @@ STORE_PASSWORD=${STORE_PASSWORD:-}
 KEY_ALIAS=${KEY_ALIAS:-}
 KEY_PASSWORD=${KEY_PASSWORD:-}
 
+# 安卓原生配置：留空＝沿用 SDK 模板（minSdk 21 / targetSdk 33）
+MIN_SDK=${MIN_SDK:-}
+TARGET_SDK=${TARGET_SDK:-}
+# 逗号分隔的权限名（不带 android.permission. 前缀），如 CAMERA,POST_NOTIFICATIONS
+ADD_PERMISSIONS=${ADD_PERMISSIONS:-}
+DEL_PERMISSIONS=${DEL_PERMISSIONS:-}
+# 防呆：非纯数字一律当作没填，避免拼出非法 gradle 语句
+case "$MIN_SDK" in ''|*[!0-9]*) MIN_SDK="" ;; esac
+case "$TARGET_SDK" in ''|*[!0-9]*) TARGET_SDK="" ;; esac
+# set -e 下不能用 a && b && c 的短路写法，条件不成立会返回 1 触发 ERR trap
+if [ -n "$MIN_SDK" ] && [ "$MIN_SDK" -lt 16 ]; then MIN_SDK=""; fi
+if [ -n "$TARGET_SDK" ] && [ "$TARGET_SDK" -lt 16 ]; then TARGET_SDK=""; fi
+
 START_TS=$(date +%s)
 elapsed() { local e=$(( $(date +%s) - START_TS )); printf '%dm%02ds' $((e/60)) $((e%60)); }
 
@@ -271,6 +284,19 @@ android.buildTypes.each { bt ->
 }
 GROOVY
 
+  # minSdk / targetSdk：只有页面显式指定时才覆盖 SDK 模板（模板默认 21 / 33）
+  if [ -n "$MIN_SDK" ] || [ -n "$TARGET_SDK" ]; then
+    printf '\n// >>> 页面指定的 SDK 版本\n' >> "$WORK_DIR/override.gradle"
+    if [ -n "$MIN_SDK" ]; then
+      printf 'android.defaultConfig.minSdkVersion = %s\n' "$MIN_SDK" >> "$WORK_DIR/override.gradle"
+      ok "minSdkVersion   = $MIN_SDK"
+    fi
+    if [ -n "$TARGET_SDK" ]; then
+      printf 'android.defaultConfig.targetSdkVersion = %s\n' "$TARGET_SDK" >> "$WORK_DIR/override.gradle"
+      ok "targetSdkVersion = $TARGET_SDK"
+    fi
+  fi
+
   local esc_for_sed
   esc_for_sed() { printf '%s' "$1" | sed -e 's/[&\\]/\\&/g'; }
 
@@ -373,6 +399,118 @@ inject_appkey() {
     ok "dcloud_appkey 已写入"
   else
     warn "appkey 写入失败，请检查 AndroidManifest.xml"
+  fi
+}
+
+# =====================================================================
+# 权限增量注入（不整份覆盖 Manifest，避免和 SDK 版本不匹配导致白屏/闪退）
+#
+# 关键事实：模板工程的 AndroidManifest.xml 里一条 uses-permission 都没有，
+# 实际 K 包里的权限来自 DCloud SDK 的 aar，靠 manifest merger 合并进来。
+# 所以：
+#   ① 移除 → 写 <uses-permission ... tools:node="remove"/>，让 merger 删掉 aar 里的声明
+#   ② 新增 → 写普通 <uses-permission .../>，merger 会合并
+# 每次构建都从模板重新复制 AndroidManifest，所以这里是幂等的。
+# =====================================================================
+inject_permissions() {
+  local APPDIR="$1"
+  local M="$APPDIR/src/main/AndroidManifest.xml"
+  if [ ! -f "$M" ]; then
+    warn "未找到 AndroidManifest.xml，跳过权限配置"
+    return 0
+  fi
+  if [ -z "$ADD_PERMISSIONS" ] && [ -z "$DEL_PERMISSIONS" ]; then
+    return 0
+  fi
+  step "应用权限配置"
+
+  local p n oldIFS removed=0 added=0
+  local delnodes="" addnodes=""
+
+  # ---------- ① 移除 ----------
+  if [ -n "$DEL_PERMISSIONS" ]; then
+    oldIFS="$IFS"; IFS=','
+    for p in $DEL_PERMISSIONS; do
+      n=$(printf '%s' "$p" | tr -d ' \t"\r')
+      if [ -z "$n" ]; then continue; fi
+      if [[ ! "$n" =~ ^[A-Z][A-Z0-9_]+$ ]]; then
+        warn "忽略非法权限名: $n"
+        continue
+      fi
+      # 已经写过 remove 节点就不重复加
+      if grep -qE "android:name=\"android\.permission\.${n}\"[^>]*tools:node=\"remove\"" "$M" 2>/dev/null; then
+        continue
+      fi
+      delnodes="${delnodes}    <uses-permission android:name=\"android.permission.${n}\" tools:node=\"remove\" />
+"
+      removed=$((removed + 1))
+    done
+    IFS="$oldIFS"
+  fi
+
+  # ---------- ② 新增 ----------
+  local ins=""
+  if [ -n "$ADD_PERMISSIONS" ]; then
+    oldIFS="$IFS"; IFS=','
+    for p in $ADD_PERMISSIONS; do
+      n=$(printf '%s' "$p" | tr -d ' \t"\r')
+      if [ -z "$n" ]; then continue; fi
+      if [[ ! "$n" =~ ^[A-Z][A-Z0-9_]+$ ]]; then
+        warn "忽略非法权限名: $n"
+        continue
+      fi
+      # 同一权限既要加又要删，以删为准
+      case ",${DEL_PERMISSIONS}," in
+        *",${n},"*) continue ;;
+      esac
+      # 已经声明过就不重复加
+      if grep -qE "android:name=\"android\.permission\.${n}\"" "$M" 2>/dev/null; then
+        continue
+      fi
+      addnodes="${addnodes}    <uses-permission android:name=\"android.permission.${n}\" />
+"
+      added=$((added + 1))
+    done
+    IFS="$oldIFS"
+  fi
+
+  if [ -z "$delnodes" ] && [ -z "$addnodes" ]; then
+    ok "权限无变化（追加 0，移除 0）"
+    return 0
+  fi
+
+  # 用了 tools:node 就必须声明 xmlns:tools
+  if [ -n "$delnodes" ] && ! grep -q 'xmlns:tools' "$M"; then
+    if perl -i -pe 's#(<manifest\b[^>]*?)(>)#$1\n    xmlns:tools="http://schemas.android.com/tools"$2#' "$M"; then
+      ok "已补 xmlns:tools 命名空间"
+    else
+      warn "xmlns:tools 注入失败，移除权限可能不生效"
+    fi
+  fi
+
+  ins="${delnodes}${addnodes}"
+  # 插到第一个 <application 之前（uses-permission 必须与 application 同级）
+  if awk -v ins="$ins" '
+      BEGIN { n = split(ins, a, "\n") }
+      !done && /<application/ {
+        for (i = 1; i <= n; i++) if (a[i] != "") print a[i]
+        done = 1
+      }
+      { print }
+    ' "$M" > "$M.tmp"; then
+    mv "$M.tmp" "$M"
+  else
+    rm -f "$M.tmp"
+    warn "权限写入失败"
+    return 0
+  fi
+
+  ok "权限：追加 ${added} 条，移除 ${removed} 条（tools:node=remove）"
+  if [ "$removed" -gt 0 ]; then
+    info "已移除：$DEL_PERMISSIONS"
+  fi
+  if [ "$added" -gt 0 ]; then
+    info "已追加：$ADD_PERMISSIONS"
   fi
 }
 
@@ -565,7 +703,7 @@ collect_output() {
   local candidate
   for candidate in $(ls -1d "$ANDROID_SDK_ROOT"/build-tools/* 2>/dev/null | sort -Vr); do BT=$candidate; done
 
-  local MIN_SDK="" TARGET_SDK="" SIGN_SHA="" SIGN_DN="" VERIFIED="false"
+  local OUT_MIN="" OUT_TARGET="" SIGN_SHA="" SIGN_DN="" VERIFIED="false"
   if [ -n "$BT" ]; then
     info "$("$BT/aapt2" dump badging "$FINAL" 2>/dev/null \
            | grep -E "^(package|application-label|launchable-activity|sdkVersion|targetSdkVersion)" | tr '\n' ';')"
@@ -575,8 +713,8 @@ collect_output() {
     else
       warn "apksigner 校验未通过（APK 可能未签名或被改动）"
     fi
-    MIN_SDK=$("$BT/aapt2" dump badging "$FINAL" 2>/dev/null | sed -n "s/.*sdkVersion:'\([0-9]*\)'.*/\1/p" | head -1) || true
-    TARGET_SDK=$("$BT/aapt2" dump badging "$FINAL" 2>/dev/null | sed -n "s/.*targetSdkVersion:'\([0-9]*\)'.*/\1/p" | head -1) || true
+    OUT_MIN=$("$BT/aapt2" dump badging "$FINAL" 2>/dev/null | sed -n "s/.*sdkVersion:'\([0-9]*\)'.*/\1/p" | head -1) || true
+    OUT_TARGET=$("$BT/aapt2" dump badging "$FINAL" 2>/dev/null | sed -n "s/.*targetSdkVersion:'\([0-9]*\)'.*/\1/p" | head -1) || true
     local CERTS
     CERTS=$("$BT/apksigner" verify --print-certs "$FINAL" 2>/dev/null) || true
     SIGN_SHA=$(printf '%s\n' "$CERTS" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -1) || true
@@ -597,8 +735,8 @@ collect_output() {
     "${CH:-}" "$(basename "$FINAL")" "$SIZE" "$SHA" >> "$OUT_DIR/.apkjson"
 
   # 全局保留最后一次的签名/体积信息（同一证书、同一版本，各渠道一致）
-  LAST_MIN_SDK="${MIN_SDK:-0}"
-  LAST_TARGET_SDK="${TARGET_SDK:-0}"
+  LAST_MIN_SDK="${OUT_MIN:-0}"
+  LAST_TARGET_SDK="${OUT_TARGET:-0}"
   LAST_SIGN_SHA="$SIGN_SHA"
   LAST_SIGN_DN="$SIGN_DN"
   LAST_VERIFIED="$VERIFIED"
@@ -704,6 +842,7 @@ do_build() {
   ok "已注入资源 → apps/$APP_ID/www"
 
   apply_config
+  inject_permissions "$APPDIR"
   inject_appkey
   inject_icon
   inject_splash "$APPDIR"

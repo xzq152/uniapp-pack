@@ -70,25 +70,14 @@
 
       <template #ops="{ row }">
         <div class="ops-cell">
-          <t-dropdown
-            v-if="row.status === 'done' && row.apkExists && apkList(row).length > 1"
-            trigger="click"
-            :options="apkOptions(row)"
-            :popup-props="{ overlayInnerStyle: { minWidth: '190px' } }"
-            @click="(d) => downloadOne(row, d.value)"
-          >
-            <t-button size="small" theme="primary" variant="text">
-              下载 ({{ apkList(row).length }})
-            </t-button>
-          </t-dropdown>
           <t-button
-            v-else-if="row.status === 'done' && row.apk && row.apkExists"
+            v-if="row.status === 'done' && row.apkExists"
             size="small"
             theme="primary"
             variant="text"
-            @click.stop="download(row)"
+            @click.stop="openFolder(row)"
           >
-            下载
+            打开文件夹
           </t-button>
           <span v-else-if="row.status === 'done'" class="dim-note">产物已清理</span>
           <t-button
@@ -167,10 +156,9 @@
 import { computed, reactive, ref, watch } from 'vue'
 import { DialogPlugin, MessagePlugin } from 'tdesign-vue-next'
 import {
-  state, loadJobs, loadTrash, retryJob, removeJob, restoreJob, purgeJob, watchJob,
+  state, loadJobs, loadTrash, retryJob, removeJob, restoreJob, purgeJob, watchJob, revealJob,
 } from '../store'
 import { fmtBytes, fmtTime, friendlyError } from '../utils'
-import { fastDownload } from '../download'
 
 const kw = ref('')
 const statusFilter = ref('')
@@ -247,36 +235,10 @@ async function reload() {
   MessagePlugin.success('已刷新')
 }
 
-// 渠道包列表（老记录没有 apks 字段，退回单个包）
-function apkList(row) {
-  if (row.apks && row.apks.length) return row.apks
-  return row.apk ? [{ channel: '', file: row.apk, size: row.apkSize, exists: true }] : []
-}
-
-function apkOptions(row) {
-  const list = apkList(row)
-  const opts = list.map((a) => ({
-    content: a.channel || '通用',
-    value: a.file,
-    disabled: !a.exists,
-  }))
-  if (list.length > 1) {
-    opts.unshift({ content: `全部下载（zip）`, value: '__zip__' })
-  }
-  return opts
-}
-
-function downloadOne(row, file) {
-  if (file === '__zip__') {
-    window.open(`/api/jobs/${row.id}/zip`, '_blank')
-    return
-  }
-  const a = apkList(row).find((x) => x.file === file)
-  if (a) fastDownload(row.id, a.file, a.size)
-}
-
-async function download(row) {
-  await fastDownload(row.id, row.apk, row.apkSize)
+// 本地构建：产物就在本机 data/outputs/<jobId>/，直接打开目录
+async function openFolder(row) {
+  const dir = await revealJob(row.id)
+  if (dir) MessagePlugin.success('已在文件管理器中打开', 2000)
 }
 
 function retry(row) {

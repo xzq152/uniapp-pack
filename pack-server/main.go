@@ -8,7 +8,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -70,6 +69,14 @@ func main() {
 	if err := store.ensureDirs(); err != nil {
 		log.Fatalf("初始化数据目录失败: %v", err)
 	}
+	// 页面切换过的 Docker 端点优先于环境变量（换机器不用改 start.bat 重启）
+	if saved, found := store.loadDockerPrefs(); found {
+		if saved == "" {
+			log.Printf("按保存的配置使用本机 Docker")
+		} else {
+			log.Printf("已加载保存的 Docker 地址: %s", saved)
+		}
+	}
 	// 启动时清掉没人用的上传包（构建成功后会立刻删，这里兜底处理历史遗留和孤儿）
 	if n, freed := store.PruneUploads(); n > 0 {
 		log.Printf("已清理 %d 份未使用的上传包，释放 %.1f MB", n, float64(freed)/1024/1024)
@@ -99,12 +106,17 @@ func main() {
 	mux.HandleFunc("PUT /api/icon", api.putIcon)
 	mux.HandleFunc("PUT /api/splash", api.putSplash)
 	mux.HandleFunc("GET /api/appkey", api.getAppKey)
+	mux.HandleFunc("GET /api/android/defaults", api.androidDefaults)
 	mux.HandleFunc("GET /api/keystores", api.listKeystores)
 	mux.HandleFunc("PUT /api/keystore", api.putKeystore)
 	mux.HandleFunc("DELETE /api/keystores/{id}", api.delKeystore)
 
 	mux.HandleFunc("GET /api/runtime", api.runtimeStatus)
 	mux.HandleFunc("POST /api/runtime/{action}", api.runtimeAction)
+
+	mux.HandleFunc("GET /api/docker/host", api.dockerHostGet)
+	mux.HandleFunc("POST /api/docker/host", api.dockerHostSet)
+	mux.HandleFunc("POST /api/docker/test", api.dockerHostTest)
 
 	mux.HandleFunc("POST /api/build", api.createJob)
 	mux.HandleFunc("GET /api/jobs", api.listJobs)
@@ -113,6 +125,7 @@ func main() {
 	mux.HandleFunc("POST /api/jobs/{id}/retry", api.retryJob)
 	mux.HandleFunc("GET /api/jobs/{id}/log", api.jobLog)
 	mux.HandleFunc("GET /api/jobs/{id}/zip", api.downloadAll)
+	mux.HandleFunc("POST /api/jobs/{id}/reveal", api.revealOutput)
 
 	mux.HandleFunc("GET /api/trash", api.listTrash)
 	mux.HandleFunc("POST /api/trash/{id}/restore", api.restoreTrash)
@@ -187,9 +200,21 @@ func printBanner(cfg Config) {
 	}
 	fmt.Printf("    打包镜像 : %s\n", cfg.Image)
 	fmt.Printf("    数据目录 : %s\n", cfg.DataDir)
+	fmt.Printf("    Docker   : %s\n", dockerBanner())
 	fmt.Println("   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 	fmt.Println("    提示：其他电脑打不开时，检查 Windows 防火墙是否放行该端口")
 	fmt.Println()
+}
+
+// dockerBanner 说明当前 docker 命令连的是本机还是远端 daemon。
+// 用 dockerEndpoint() 而不是直接读环境变量：页面切换过的地址也存在 data/docker.json 里，
+// 只读 env 会在横幅上显示与实际不符的地址。
+func dockerBanner() string {
+	h := dockerEndpoint()
+	if h == "" || h == "local" || strings.HasPrefix(h, "local（") {
+		return "本地 daemon"
+	}
+	return h + "（远程）"
 }
 
 func lanIPs() []string {
@@ -208,9 +233,4 @@ func lanIPs() []string {
 		}
 	}
 	return out
-}
-
-func execOut(name string, args ...string) ([]byte, error) {
-	cmd := exec.Command(name, args...)
-	return cmd.Output()
 }

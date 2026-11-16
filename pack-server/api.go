@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -98,6 +99,145 @@ type ManifestInfo struct {
 	Name        string `json:"name"`
 	VersionName string `json:"versionName"`
 	VersionCode string `json:"versionCode"`
+
+	// 以下字段只有「HBuilderX 项目根目录的 manifest.json」才带（带 app-plus.distribute），
+	// 「生成本地打包App资源」导出的 www/manifest.json 已被裁剪，这些字段为空。
+	PackageName   string   `json:"packageName,omitempty"`
+	MinSdk        int      `json:"minSdk,omitempty"`
+	TargetSdk     int      `json:"targetSdk,omitempty"`
+	Permissions   []string `json:"permissions,omitempty"`   // 纯权限名，如 CAMERA
+	Modules       []string `json:"modules,omitempty"`       // uni-app 模块，如 Camera / Geolocation
+	HasDistribute bool     `json:"hasDistribute,omitempty"` // 是否读到了 distribute.android
+}
+
+// manifestRaw 兼容 HBuilderX 项目的两种写法：
+//   - 项目根 manifest.json：version 可能是对象 {name, code}，也可能有顶层 versionName/versionCode
+//   - 打包资源 manifest.json：同样是 version 对象
+type manifestRaw struct {
+	ID          string      `json:"id"`
+	AppIDAlt    string      `json:"appid"` // HBuilderX 项目根 manifest 用的是小写 appid
+	Name        string      `json:"name"`
+	VersionName string      `json:"versionName"`
+	VersionCode interface{} `json:"versionCode"`
+	Version     *struct {
+		Name string      `json:"name"`
+		Code interface{} `json:"code"`
+	} `json:"version"`
+	AppPlus *struct {
+		Distribute *struct {
+			Android *struct {
+				Packagename     string      `json:"packagename"`
+				MinSdkVersion   interface{} `json:"minSdkVersion"`
+				TargetSdkVersion interface{} `json:"targetSdkVersion"`
+				Permissions     []string    `json:"permissions"`
+			} `json:"android"`
+		} `json:"distribute"`
+		Modules map[string]interface{} `json:"modules"`
+	} `json:"app-plus"`
+	Permissions map[string]interface{} `json:"permissions"`
+}
+
+// asInt 把 manifest 里可能是数字/字符串/浮点的版本号统一成 int
+func asInt(v interface{}) int {
+	switch t := v.(type) {
+	case float64:
+		return int(t)
+	case int:
+		return t
+	case string:
+		n, _ := strconv.Atoi(strings.TrimSpace(t))
+		return n
+	}
+	return 0
+}
+
+func asString(v interface{}) string {
+	switch t := v.(type) {
+	case float64:
+		if t == float64(int64(t)) {
+			return strconv.FormatInt(int64(t), 10)
+		}
+		return strconv.FormatFloat(t, 'f', -1, 64)
+	case string:
+		return strings.TrimSpace(t)
+	case nil:
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprint(v))
+}
+
+var permNameRE = regexp.MustCompile(`android\.permission\.([A-Z][A-Z0-9_]*)`)
+
+// normalizePerm 从 "<uses-permission android:name=\"android.permission.CAMERA\"/>" 或 "CAMERA"
+// 里取出纯权限名；非法字符一律丢弃（这个值最终会写进 AndroidManifest.xml，必须严格校验）
+func normalizePerm(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	if m := permNameRE.FindStringSubmatch(s); len(m) == 2 {
+		return m[1]
+	}
+	// 允许直接写 CAMERA / POST_NOTIFICATIONS
+	s = strings.TrimPrefix(s, "android.permission.")
+	if ok, _ := regexp.MatchString(`^[A-Z][A-Z0-9_]{1,60}$`, s); ok {
+		return s
+	}
+	return ""
+}
+
+func parseManifest(r io.Reader) ManifestInfo {
+	var raw manifestRaw
+	if err := json.NewDecoder(io.LimitReader(r, 4<<20)).Decode(&raw); err != nil {
+		return ManifestInfo{}
+	}
+
+	// 版本号：优先顶层，其次 version 对象
+	vn := strings.TrimSpace(raw.VersionName)
+	vc := asString(raw.VersionCode)
+	if raw.Version != nil {
+		if vn == "" {
+			vn = strings.TrimSpace(raw.Version.Name)
+		}
+		if vc == "" {
+			vc = asString(raw.Version.Code)
+		}
+	}
+
+	appID := strings.TrimSpace(raw.ID)
+	if appID == "" {
+		appID = strings.TrimSpace(raw.AppIDAlt)
+	}
+
+	out := ManifestInfo{
+		AppID:       appID,
+		Name:        strings.TrimSpace(raw.Name),
+		VersionName: vn,
+		VersionCode: vc,
+	}
+
+	// uni-app 模块（Camera / Geolocation / Push ...），可用于推测需要的安卓权限
+	for k := range raw.Permissions {
+		out.Modules = append(out.Modules, k)
+	}
+	sort.Strings(out.Modules)
+
+	if raw.AppPlus == nil || raw.AppPlus.Distribute == nil || raw.AppPlus.Distribute.Android == nil {
+		return out
+	}
+	an := raw.AppPlus.Distribute.Android
+	out.HasDistribute = true
+	out.PackageName = strings.TrimSpace(an.Packagename)
+	out.MinSdk = asInt(an.MinSdkVersion)
+	out.TargetSdk = asInt(an.TargetSdkVersion)
+	seen := map[string]bool{}
+	for _, p := range an.Permissions {
+		if n := normalizePerm(p); n != "" && !seen[n] {
+			seen[n] = true
+			out.Permissions = append(out.Permissions, n)
+		}
+	}
+	return out
 }
 
 func readManifestFromZip(path string) ManifestInfo {
@@ -127,29 +267,7 @@ func readManifestFromZip(path string) ManifestInfo {
 		return ManifestInfo{}
 	}
 	defer rc.Close()
-
-	var raw struct {
-		ID          string      `json:"id"`
-		Name        string      `json:"name"`
-		VersionName string      `json:"versionName"`
-		VersionCode interface{} `json:"versionCode"`
-	}
-	if err := json.NewDecoder(io.LimitReader(rc, 4<<20)).Decode(&raw); err != nil {
-		return ManifestInfo{}
-	}
-	vc := ""
-	if raw.VersionCode != nil {
-		vc = strings.TrimSpace(fmt.Sprint(raw.VersionCode))
-		if vc == "<nil>" {
-			vc = ""
-		}
-	}
-	return ManifestInfo{
-		AppID:       raw.ID,
-		Name:        raw.Name,
-		VersionName: raw.VersionName,
-		VersionCode: vc,
-	}
+	return parseManifest(rc)
 }
 
 // ---------------------------------------------------------------------------
@@ -246,6 +364,12 @@ type buildReq struct {
 	Icon        string   `json:"icon"`
 	Splash      string   `json:"splash"`
 	Channels    []string `json:"channels"`
+
+	// 安卓原生配置（留空＝用 SDK 模板默认值）
+	MinSdk     int      `json:"minSdk"`
+	TargetSdk  int      `json:"targetSdk"`
+	AddPerms   []string `json:"addPerms"` // 要新增的权限
+	DelPerms   []string `json:"delPerms"` // 要从基线里去掉的权限
 }
 
 // sanitizeChannels 规范化渠道名：去空格、只留 [A-Za-z0-9_-]、去重保序，最多 12 个
@@ -274,6 +398,33 @@ func sanitizeChannels(in []string) []string {
 		}
 	}
 	return out
+}
+
+// sanitizePerms 权限名白名单校验：只留 [A-Z][A-Z0-9_]*，去重保序，最多 120 个。
+// 这些名字会被拼进 AndroidManifest.xml，必须挡住引号/尖括号等注入字符。
+func sanitizePerms(in []string) []string {
+	out := make([]string, 0, len(in))
+	seen := map[string]bool{}
+	for _, raw := range in {
+		n := normalizePerm(raw)
+		if n == "" || seen[n] {
+			continue
+		}
+		seen[n] = true
+		out = append(out, n)
+		if len(out) >= 120 {
+			break
+		}
+	}
+	return out
+}
+
+// clampSdk 只接受 16~99 的合理值，其余当「没填」处理（由 SDK 模板默认值兜底）
+func clampSdk(v int) int {
+	if v < 16 || v > 99 {
+		return 0
+	}
+	return v
 }
 
 func (a *API) createJob(w http.ResponseWriter, r *http.Request) {
@@ -305,6 +456,12 @@ func (a *API) createJob(w http.ResponseWriter, r *http.Request) {
 	}
 	// 渠道名只允许字母数字下划线中划线，去重保序
 	channels := sanitizeChannels(req.Channels)
+
+	// 权限名严格校验后才会写进 AndroidManifest.xml
+	addPerms := sanitizePerms(req.AddPerms)
+	delPerms := sanitizePerms(req.DelPerms)
+	req.MinSdk = clampSdk(req.MinSdk)
+	req.TargetSdk = clampSdk(req.TargetSdk)
 
 	// 校验证书口令已带齐
 	storePass, keyAlias, keyPass := "", "", ""
@@ -339,6 +496,10 @@ func (a *API) createJob(w http.ResponseWriter, r *http.Request) {
 		Icon:        req.Icon,
 		Splash:      req.Splash,
 		Channels:    channels,
+		ReqMinSdk:    req.MinSdk,
+		ReqTargetSdk: req.TargetSdk,
+		AddPerms:     addPerms,
+		DelPerms:     delPerms,
 		subs:        make(map[uint64]chan []byte),
 	}
 	// 记住 appkey，下次同 appid 自动带出
@@ -363,23 +524,34 @@ func (a *API) listJobs(w http.ResponseWriter, r *http.Request) {
 	})
 	out := make([]JobView, 0, len(list))
 	for _, j := range list {
-		v := j.Snapshot()
+		v := a.store.jobView(j)
 		v.Logs = nil // 列表不带日志，省流量
-		v.HasUpload = a.store.uploadExists(v.UploadID)
-		if v.APK != "" {
-			if _, err := os.Stat(filepath.Join(a.store.outputDir(v.ID), v.APK)); err == nil {
-				v.APKExists = true
-			}
-		}
-		for i := range v.APKs {
-			if _, err := os.Stat(filepath.Join(a.store.outputDir(v.ID), v.APKs[i].File)); err == nil {
-				v.APKs[i].Exists = true
-				v.APKExists = true
-			}
-		}
 		out = append(out, v)
 	}
 	jsonOK(w, out)
+}
+
+// jobView 生成给前端的快照，并补上「产物是否还在」「产物目录在哪」这类运行时信息。
+// 注意：OutDir 只在这条路径上填（不落盘），jobs.json 里不会出现本机绝对路径。
+func (s *Store) jobView(j *Job) JobView {
+	v := j.Snapshot()
+	v.HasUpload = s.uploadExists(v.UploadID)
+	dir := s.outputDir(v.ID)
+	if v.Status == "done" {
+		v.OutDir = dir
+	}
+	if v.APK != "" {
+		if _, err := os.Stat(filepath.Join(dir, v.APK)); err == nil {
+			v.APKExists = true
+		}
+	}
+	for i := range v.APKs {
+		if _, err := os.Stat(filepath.Join(dir, v.APKs[i].File)); err == nil {
+			v.APKs[i].Exists = true
+			v.APKExists = true
+		}
+	}
+	return v
 }
 
 func (a *API) jobEvents(w http.ResponseWriter, r *http.Request) {
@@ -408,7 +580,7 @@ func (a *API) jobEvents(w http.ResponseWriter, r *http.Request) {
 		flusher.Flush()
 	}
 
-	snap := j.Snapshot()
+	snap := a.store.jobView(j)
 	send("snapshot", snap)
 
 	subID, ch := j.Subscribe()
@@ -439,10 +611,8 @@ func (a *API) jobEvents(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) env(w http.ResponseWriter, r *http.Request) {
 	total := ""
-	if out, err := runOut("docker", "info", "--format", "{{.MemTotal}}"); err == nil {
-		if v, e := strconv.ParseFloat(strings.TrimSpace(out), 64); e == nil {
-			total = fmt.Sprintf("%.1f GB", v/1024/1024/1024)
-		}
+	if v, err := getDockerClient().memTotal(); err == nil && v > 0 {
+		total = fmt.Sprintf("%.1f GB", float64(v)/1024/1024/1024)
 	}
 	jsonOK(w, map[string]any{
 		"image":       a.cfg.Image,
@@ -597,6 +767,95 @@ func (a *API) downloadAll(w http.ResponseWriter, r *http.Request) {
 	_ = zw.Close()
 }
 
+// ---------------------------------------------------------------------------
+// 打开产物目录：本地构建的 APK 就在 DATA_DIR/outputs/<jobId>/ 里，
+// 直接在本机文件管理器打开这个目录，比让浏览器再下一遍更省事。
+// 路径完全由服务端按 job id 算出，不接受任何前端传入的路径。
+// ---------------------------------------------------------------------------
+
+func (a *API) revealOutput(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if a.store.Get(id) == nil {
+		http.Error(w, "这条记录不存在（可能已被清理）", 404)
+		return
+	}
+	dir := a.store.outputDir(id)
+	if st, err := os.Stat(dir); err != nil || !st.IsDir() {
+		http.Error(w, "产物目录不存在，可能已被清理", 404)
+		return
+	}
+	if err := openInFileManager(dir); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	jsonOK(w, map[string]any{"ok": true, "dir": dir})
+}
+
+// ---------------------------------------------------------------------------
+// Docker 端点：查看当前地址、切换、试连
+// ---------------------------------------------------------------------------
+
+// dockerHostGet 返回当前生效的端点 + 环境变量里的原始值（便于排查）
+func (a *API) dockerHostGet(w http.ResponseWriter, r *http.Request) {
+	dc := getDockerClient() // 先确保客户端已初始化，dockerEndpoint() 才拿得到 via
+	envHost := strings.TrimSpace(os.Getenv("DOCKER_HOST"))
+	jsonOK(w, map[string]any{
+		"host":    dockerEndpoint(),
+		"raw":     dc.host, // 空 = 本机
+		"envHost": envHost,
+		"local":   dc.host == "",
+	})
+}
+
+// dockerHostSet 切换端点：先试连，通了才写入并持久化
+func (a *API) dockerHostSet(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Host string `json:"host"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "请求格式错误: "+err.Error(), 400)
+		return
+	}
+	norm := normalizeDockerHost(req.Host)
+
+	// 有任务在排队/构建时不允许切走，否则构建会打到一半换了机器。
+	// 注意：这个判断不要挂在 runtimeRunning() 下面——环境没启动时也可能有 queued
+	// 任务在队列里等，把它一起放行会让文档承诺的 409 失效。
+	if n := a.store.runningJobCount(); n > 0 {
+		http.Error(w, "有任务正在构建，请等构建结束再切换 Docker 地址", 409)
+		return
+	}
+
+	probe := probeDockerHost(norm)
+	if !probe.OK {
+		jsonErr(w, 400, "切换失败："+probe.Message)
+		return
+	}
+
+	setDockerHost(norm)
+	if err := a.store.saveDockerPrefs(norm); err != nil {
+		jsonErr(w, 500, "已切换但保存配置失败："+err.Error())
+		return
+	}
+	jsonOK(w, map[string]any{
+		"host":    dockerEndpoint(),
+		"raw":     norm,
+		"runtime": a.store.RuntimeStatus(),
+	})
+}
+
+// dockerHostTest 只试连，不切换
+func (a *API) dockerHostTest(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Host string `json:"host"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "请求格式错误: "+err.Error(), 400)
+		return
+	}
+	jsonOK(w, probeDockerHost(req.Host))
+}
+
 func contentDisposition(name string) string {
 	// RFC 5987：兼容中文文件名
 	esc := strings.ReplaceAll(url.QueryEscape(name), "+", "%20")
@@ -613,6 +872,14 @@ func jsonOK(w http.ResponseWriter, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+// jsonErr 以 JSON 形式返回错误，让前端能直接展示可读原因（而不是裸文本）
+func jsonErr(w http.ResponseWriter, code int, msg string) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(code)
+	_ = json.NewEncoder(w).Encode(map[string]any{"error": msg})
+}
+
 func jsonField(s, key string) string {
 	var m map[string]any
 	if json.Unmarshal([]byte(s), &m) != nil {
@@ -622,11 +889,6 @@ func jsonField(s, key string) string {
 		return v
 	}
 	return ""
-}
-
-func runOut(name string, args ...string) (string, error) {
-	b, err := execOut(name, args...)
-	return string(b), err
 }
 
 // ---------------------------------------------------------------------------
@@ -956,21 +1218,9 @@ func readManifestFromZipRaw(path string) *ManifestInfo {
 		return nil
 	}
 	defer f.Close()
-	var raw struct {
-		ID          string      `json:"id"`
-		Name        string      `json:"name"`
-		VersionName string      `json:"versionName"`
-		VersionCode interface{} `json:"versionCode"`
-	}
-	if err := json.NewDecoder(io.LimitReader(f, 4<<20)).Decode(&raw); err != nil {
+	m := parseManifest(f)
+	if m.AppID == "" && m.Name == "" && m.VersionName == "" {
 		return nil
 	}
-	vc := ""
-	if raw.VersionCode != nil {
-		vc = strings.TrimSpace(fmt.Sprint(raw.VersionCode))
-		if vc == "<nil>" {
-			vc = ""
-		}
-	}
-	return &ManifestInfo{AppID: raw.ID, Name: raw.Name, VersionName: raw.VersionName, VersionCode: vc}
+	return &m
 }

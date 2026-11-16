@@ -78,6 +78,17 @@ body {
   50% { opacity: 1; transform: scale(1); }
 }
 
+/* 顶栏里的 Docker 地址：像链接一样可点，字号比胶囊正文更小一点 */
+.env-pill .host-btn {
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 11.5px;
+  padding: 0 6px;
+  height: 22px;
+  color: inherit;
+  opacity: .85;
+}
+.env-pill .host-btn:hover { opacity: 1; text-decoration: underline; }
+
 /* ---------- 内容 ---------- */
 .main-card { margin-bottom: 16px; }
 .content {
@@ -197,14 +208,4 @@ body {
   .topbar { padding: 10px 12px; }
   .brand h1 { font-size: 15px; }
   .brand .env-pill { margin-left: 0; }
-}
-
-/* 下载渠道下拉：TDesign 会给每个 item 写内联 max-width（=触发按钮宽度），
-   渠道名会被截断，这里强制放开，让菜单按 min-width 撑开 */
-.t-dropdown__menu { min-width: 160px !important; }
-.t-dropdown__menu > div { width: 100%; }
-.t-dropdown__item {
-  max-width: none !important;
-  min-width: 0 !important;
-  width: 100%;
 }

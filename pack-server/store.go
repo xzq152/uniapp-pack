@@ -57,6 +57,12 @@ type Job struct {
 	AppKeySet   bool       `json:"appKeySet,omitempty"`
 	Elapsed     string     `json:"elapsed,omitempty"`
 
+	// 安卓原生配置（本次构建的输入，0/空＝用 SDK 模板默认值）
+	ReqMinSdk    int      `json:"reqMinSdk,omitempty"`
+	ReqTargetSdk int      `json:"reqTargetSdk,omitempty"`
+	AddPerms     []string `json:"addPerms,omitempty"`
+	DelPerms     []string `json:"delPerms,omitempty"`
+
 	// 内部字段：不序列化给前端
 	storePass string
 	keyAlias  string
@@ -272,6 +278,20 @@ func (s *Store) List() []*Job {
 	return out
 }
 
+// runningJobCount 当前排队 + 构建中的任务数（切换 Docker 端点前用它兜底）
+func (s *Store) runningJobCount() int {
+	n := 0
+	for _, j := range s.List() {
+		j.mu.Lock()
+		st := j.Status
+		j.mu.Unlock()
+		if st == "running" || st == "queued" {
+			n++
+		}
+	}
+	return n
+}
+
 // Remove 彻底删除（回收站清理时用）
 func (s *Store) Remove(id string) {
 	s.mu.Lock()
@@ -451,6 +471,14 @@ type JobView struct {
 	HasUpload   bool       `json:"hasUpload"`
 	APKExists   bool       `json:"apkExists"`
 	Logs        []string   `json:"logs,omitempty"`
+
+	// OutDir 产物在本机的绝对目录（仅接口返回时填充，不落盘）
+	OutDir string `json:"outDir,omitempty"`
+
+	ReqMinSdk    int      `json:"reqMinSdk,omitempty"`
+	ReqTargetSdk int      `json:"reqTargetSdk,omitempty"`
+	AddPerms     []string `json:"addPerms,omitempty"`
+	DelPerms     []string `json:"delPerms,omitempty"`
 }
 
 func (j *Job) Snapshot() JobView {
@@ -489,6 +517,11 @@ func (j *Job) Snapshot() JobView {
 		AppKeySet:   j.AppKeySet,
 		Elapsed:     j.Elapsed,
 		Logs:        append([]string(nil), j.logs...),
+
+		ReqMinSdk:    j.ReqMinSdk,
+		ReqTargetSdk: j.ReqTargetSdk,
+		AddPerms:     append([]string(nil), j.AddPerms...),
+		DelPerms:     append([]string(nil), j.DelPerms...),
 	}
 }
 

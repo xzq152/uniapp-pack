@@ -1,15 +1,12 @@
 package main
 
 import (
-	"archive/tar"
 	"archive/zip"
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -73,8 +70,8 @@ func (s *Store) runBuild(j *Job) {
 	}
 
 	j.SetState("running", "上传资源到容器", 13)
-	if out, err := exec.Command("docker", "cp", srcFile, runtimeName+":/workspace/src/").CombinedOutput(); err != nil {
-		j.FinishErr("注入源码失败: " + err.Error() + "\n" + string(out))
+	if err := getDockerClient().copyToContainer(runtimeName, "/workspace/src/", srcFile); err != nil {
+		j.FinishErr("注入源码失败: " + err.Error())
 		return
 	}
 	if err := dockerCpTarIn(runtimeName, "/workspace/config", cfgTmp); err != nil {
@@ -87,11 +84,11 @@ func (s *Store) runBuild(j *Job) {
 	ok := s.streamBuild(j)
 
 	// ---- 6. 取回配置和产物（即使失败也取，便于排查）----
-	_ = exec.Command("docker", "cp", runtimeName+":/workspace/config/.", s.configDir()).Run()
+	_ = getDockerClient().copyFromContainer(runtimeName, "/workspace/config/.", s.configDir())
 	// 启动图是临时注入物，不能随配置镜像持久化，否则会覆盖后续构建的选择
 	os.Remove(filepath.Join(s.configDir(), "splash.png"))
 	os.Remove(filepath.Join(s.configDir(), "splash.9.png"))
-	_ = exec.Command("docker", "cp", runtimeName+":/workspace/output/.", outDir).Run()
+	_ = getDockerClient().copyFromContainer(runtimeName, "/workspace/output/.", outDir)
 
 	if !ok {
 		msg := "构建失败"
@@ -111,7 +108,7 @@ func (s *Store) runBuild(j *Job) {
 		j.Elapsed = fmt.Sprintf("%.0fs", time.Since(start).Seconds())
 		j.mu.Unlock()
 		// 策略：构建成功后原包没用了，立刻删掉释放空间（失败则保留，方便一键重试）
-		j.AddLog("原包已清理（需要再打请重新上传或点「再打一个」）")
+		j.AddLog("原包已清理（需要再打请重新选择文件夹上传）")
 		if err := os.RemoveAll(upDir); err != nil {
 			j.AddLog("清理原包失败: " + err.Error())
 		}
@@ -155,14 +152,17 @@ func (s *Store) runBuild(j *Job) {
 }
 
 // ---------------------------------------------------------------------------
-// 流式执行 docker start -a，实时解析进度
+// 流式执行容器内 entrypoint build，实时解析进度
+//
+// 走 Docker Engine API：exec create + exec start（attach），输出是流式的，
+// 与原来 docker exec 的体验一致；不再依赖本机 docker CLI。
 // ---------------------------------------------------------------------------
 
 func (s *Store) streamBuild(j *Job) bool {
-	args := []string{"exec"}
+	env := []string{}
 	add := func(k, v string) {
 		if v != "" {
-			args = append(args, "-e", k+"="+v)
+			env = append(env, k+"="+v)
 		}
 	}
 	add("APP_ID", j.AppID)
@@ -179,27 +179,27 @@ func (s *Store) streamBuild(j *Job) bool {
 	add("GRADLE_EXTRA_ARGS", s.gradleArgs())
 	add("CHANNELS", strings.Join(j.Channels, ","))
 
-	args = append(args, runtimeName, "/opt/pack/entrypoint.sh", "build")
-
-	cmd := exec.Command("docker", args...)
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		j.FinishErr("无法创建输出管道: " + err.Error())
-		return false
+	// 安卓原生配置：不填就不传，容器端沿用 SDK 模板默认值
+	if j.ReqMinSdk > 0 {
+		add("MIN_SDK", strconv.Itoa(j.ReqMinSdk))
 	}
-	cmd.Stderr = nil
-	if err := cmd.Start(); err != nil {
+	if j.ReqTargetSdk > 0 {
+		add("TARGET_SDK", strconv.Itoa(j.ReqTargetSdk))
+	}
+	add("ADD_PERMISSIONS", strings.Join(j.AddPerms, ","))
+	add("DEL_PERMISSIONS", strings.Join(j.DelPerms, ","))
+
+	dc := getDockerClient()
+	execID, err := dc.execCreate(runtimeName, []string{"/opt/pack/entrypoint.sh", "build"}, env)
+	if err != nil {
 		j.FinishErr("启动容器失败: " + err.Error())
 		return false
 	}
 
 	expected := 45 // 首次按经验值估算，跑多了会自动修正
 	tasks := 0
-	sc := bufio.NewScanner(stdout)
-	sc.Buffer(make([]byte, 0, 128*1024), 2*1024*1024)
 
-	for sc.Scan() {
-		line := sc.Text()
+	exitCode, err := dc.execAttach(execID, func(line string) {
 		j.AddLog(trimLog(line))
 
 		switch {
@@ -223,11 +223,12 @@ func (s *Store) streamBuild(j *Job) bool {
 			j.Error = j.Error + "\n" + line
 			j.mu.Unlock()
 		}
+	})
+	if err != nil {
+		j.FinishErr("执行构建失败: " + err.Error())
+		return false
 	}
-	_ = sc.Err()
-
-	err = cmd.Wait()
-	return err == nil
+	return exitCode == 0
 }
 
 // ---------------------------------------------------------------------------
@@ -370,58 +371,11 @@ func (s *Store) prepareConfig(j *Job, dst string) error {
 }
 
 // dockerCpTarIn 把 dir 的内容以 tar 流写进容器的 dest 目录
+// dockerCpTarIn 把本地目录「内容」写入容器 dest 目录（等价 docker cp dir/. ctr:dest）
+//
+// 与 copyToContainer 的区别：这个不保留目录名本身，直接把 dir 下的条目铺进 dest。
 func dockerCpTarIn(ctr, dest, dir string) error {
-	cmd := exec.Command("docker", "cp", "-", ctr+":"+dest)
-	in, err := cmd.StdinPipe()
-	if err != nil {
-		return err
-	}
-	cmd.Stdout = nil
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-
-	tw := tar.NewWriter(in)
-	err = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(dir, path)
-		if err != nil || rel == "." {
-			return nil
-		}
-		hdr, err := tar.FileInfoHeader(info, "")
-		if err != nil {
-			return err
-		}
-		hdr.Name = filepath.ToSlash(rel)
-		if err := tw.WriteHeader(hdr); err != nil {
-			return err
-		}
-		if info.Mode().IsRegular() {
-			f, err := os.Open(path)
-			if err != nil {
-				return err
-			}
-			_, err = io.Copy(tw, f)
-			f.Close()
-			return err
-		}
-		return nil
-	})
-	if err != nil {
-		tw.Close()
-		in.Close()
-		cmd.Wait()
-		return err
-	}
-	if err := tw.Close(); err != nil {
-		in.Close()
-		cmd.Wait()
-		return err
-	}
-	in.Close()
-	return cmd.Wait()
+	return getDockerClient().copyDirContentsToContainer(ctr, dest, dir)
 }
 
 func copyDirContents(src, dst string) error {
@@ -489,12 +443,9 @@ func (s *Store) gradleArgs() string {
 	if s.cfg.GradleArgs != "" {
 		return s.cfg.GradleArgs
 	}
-	out, err := exec.Command("docker", "info", "--format", "{{.MemTotal}}").Output()
 	total := 8
-	if err == nil {
-		if v, e := strconv.ParseFloat(strings.TrimSpace(string(out)), 64); e == nil && v > 0 {
-			total = int(v / 1024 / 1024 / 1024)
-		}
+	if v, err := getDockerClient().memTotal(); err == nil && v > 0 {
+		total = int(float64(v) / 1024 / 1024 / 1024)
 	}
 	mx, workers := 4096, 4
 	switch {

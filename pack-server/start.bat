@@ -3,34 +3,40 @@ setlocal
 cd /d "%~dp0"
 
 REM ===================================================================
-REM   uni-app °²×¿´ò°ü·şÎñ ¡¤ ¾ÖÓòÍøÆô¶¯½Å±¾
-REM   Ë«»÷¼´¿ÉÆô¶¯£¬Æô¶¯ºó°´ÌáÊ¾µÄ¾ÖÓòÍøµØÖ·ÔÚÆäËûµçÄÔ·ÃÎÊ
+REM   uni-app å®‰å“æ‰“åŒ…æœåŠ¡ Â· å±€åŸŸç½‘å¯åŠ¨è„šæœ¬
+REM
+REM   ä¸¤ç§éƒ¨ç½²æ–¹å¼éƒ½æ”¯æŒï¼š
+REM     Â· Docker åœ¨æœ¬æœº   â†’ ä¸éœ€è¦è®¾ç½® DOCKER_HOSTï¼Œè‡ªåŠ¨èµ° unix socket
+REM     Â· Docker åœ¨åˆ«çš„æœºå™¨ â†’ è®¾ç½®ä¸‹é¢çš„ DOCKER_HOST
+REM
+REM   æ³¨æ„ï¼šæœåŠ¡å·²æ”¹ä¸ºã€Œç›´è¿ Docker Engine HTTP APIã€ï¼ˆè§ dockerapi.goï¼‰ï¼Œ
+REM   æ‰€ä»¥**æœ¬æœºä¸éœ€è¦å®‰è£… docker å‘½ä»¤è¡Œ**ï¼Œåªè¦èƒ½è®¿é—® Docker çš„ API ç«¯å£å³å¯ã€‚
+REM   ä»¥å‰è¿™é‡Œä¼š `where docker` æ£€æŸ¥ CLIï¼Œè·¨æœºéƒ¨ç½²æ—¶ä¼šè¯¯æŠ¥ã€Œæœªæ£€æµ‹åˆ° dockerã€ã€‚
 REM ===================================================================
 
-where docker >nul 2>nul
-if errorlevel 1 (
-  echo [x] Î´¼ì²âµ½ docker£¬ÇëÏÈ°²×° Docker Desktop ²¢Æô¶¯
-  pause & exit /b 1
-)
+REM ---- Docker ç«¯ç‚¹ï¼ˆæ”¹æˆè‡ªå·±çš„ Docker æœºå™¨ï¼‰----
+REM æœ¬æœº Dockerï¼šç•™ç©ºæˆ–æ³¨é‡Šæ‰è¿™ä¸€è¡Œ
+set "DOCKER_HOST=tcp://192.168.1.23:2375"
 
-docker image inspect uniapp-android-builder:latest >nul 2>nul
-if errorlevel 1 (
-  echo [!] ´ò°ü¾µÏñ²»´æÔÚ£¬ÇëÏÈÔÚÉÏ²ãÄ¿Â¼Ö´ĞĞ build-image.sh ¹¹½¨¾µÏñ
-  echo     cd ..\uniapp-android-builder ^&^& build-image.sh
-  pause & exit /b 1
-)
+REM ---- æ•°æ®ç›®å½•ï¼ˆä¸Šä¼ åŒ…/è¯ä¹¦/äº§ç‰©éƒ½åœ¨è¿™é‡Œï¼ŒåŠ¡å¿…æ”¾åœ¨æŒä¹…ä½ç½®ï¼‰----
+REM ä¸è®¾ç½®çš„è¯ä¼šé»˜è®¤å– exe æ‰€åœ¨ç›®å½•çš„ data/ï¼Œç”¨ go run æ—¶ä¼šè½åˆ°ä¸´æ—¶ç›®å½•
+set "DATA_DIR=%~dp0data"
 
-if not exist uniapp-pack-server.exe (
-  echo [*] Ê×´ÎÆô¶¯£¬ÕıÔÚ±àÒë...
+if not exist "%DATA_DIR%" mkdir "%DATA_DIR%"
+
+REM ---- é¦–æ¬¡å¯åŠ¨è‡ªåŠ¨ç¼–è¯‘ ----
+if not exist pack-server.exe (
+  echo [*] é¦–æ¬¡å¯åŠ¨ï¼Œæ­£åœ¨ç¼–è¯‘...
   set "PATH=%PATH%;C:\Program Files\Go\bin"
-  go build -o uniapp-pack-server.exe .
-  if errorlevel 1 ( echo [x] ±àÒëÊ§°Ü & pause & exit /b 1 )
+  go build -o pack-server.exe .
+  if errorlevel 1 ( echo [x] ç¼–è¯‘å¤±è´¥ & pause & exit /b 1 )
 )
 
-if not exist "%~dp0data" mkdir "%~dp0data"
+echo.
+echo [*] DOCKER_HOST = %DOCKER_HOST%
+echo [*] DATA_DIR    = %DATA_DIR%
+echo [*] æ­£åœ¨å¯åŠ¨ï¼Œå…³é—­æœ¬çª—å£å³åœæ­¢æœåŠ¡
+echo.
 
-echo.
-echo [*] ÕıÔÚÆô¶¯£¬¹Ø±Õ±¾´°¿Ú¼´Í£Ö¹·şÎñ
-echo.
-uniapp-pack-server.exe
+pack-server.exe
 pause

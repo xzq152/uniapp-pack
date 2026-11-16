@@ -6,7 +6,13 @@ async function handle(res) {
     return ct.includes('application/json') ? res.json() : res.text()
   }
   const text = await res.text()
-  const err = new Error(text || `HTTP ${res.status}`)
+  // 后端有些错误是 JSON（{error:"..."}），挑出可读信息再抛
+  let msg = text
+  try {
+    const j = JSON.parse(text)
+    if (j && typeof j.error === 'string') msg = j.error
+  } catch (e) { /* 不是 JSON，就用原文 */ }
+  const err = new Error(msg || `HTTP ${res.status}`)
   err.status = res.status
   throw err
 }
@@ -15,6 +21,12 @@ export const api = {
   env: () => fetch('/api/env', { cache: 'no-store' }).then(handle),
   runtime: () => fetch('/api/runtime', { cache: 'no-store' }).then(handle),
   runtimeAction: (a) => fetch(`/api/runtime/${a}`, { method: 'POST' }).then(handle),
+
+  dockerHost: () => fetch('/api/docker/host', { cache: 'no-store' }).then(handle),
+  dockerSetHost: (host) =>
+    fetch('/api/docker/host', { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ host }) }).then(handle),
+  dockerTest: (host) =>
+    fetch('/api/docker/test', { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ host }) }).then(handle),
 
   login: (password) =>
     fetch('/api/login', {
@@ -31,11 +43,13 @@ export const api = {
     fetch('/api/keystore?' + new URLSearchParams(meta), { method: 'PUT', body: file }).then(handle),
   delKeystore: (id) => fetch('/api/keystores/' + id, { method: 'DELETE' }).then(handle),
   appkey: (appid) => fetch('/api/appkey?appid=' + encodeURIComponent(appid)).then(handle),
+  androidDefaults: () => fetch('/api/android/defaults', { cache: 'no-store' }).then(handle),
 
   build: (body) =>
     fetch('/api/build', { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify(body) }).then(handle),
   jobs: () => fetch('/api/jobs', { cache: 'no-store' }).then(handle),
   retry: (id) => fetch(`/api/jobs/${id}/retry`, { method: 'POST' }).then(handle),
+  reveal: (id) => fetch(`/api/jobs/${id}/reveal`, { method: 'POST' }).then(handle),
   remove: (id) => fetch(`/api/jobs/${id}`, { method: 'DELETE' }).then(handle),
 
   trash: () => fetch('/api/trash', { cache: 'no-store' }).then(handle),
@@ -73,7 +87,7 @@ export function uploadBundle(files, rootName, onProgress) {
   })
 }
 
-// 上传单文件（裸流，带进度）
+// 上传单文件（裸流，带进度）—— 目前只用文件夹上传，保留备用
 export function uploadFile(file, onProgress) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest()
@@ -89,8 +103,4 @@ export function uploadFile(file, onProgress) {
     xhr.onerror = () => reject(new Error('网络错误'))
     xhr.send(file)
   })
-}
-
-export function downloadUrl(jobId, name) {
-  return `/d/${jobId}/${encodeURIComponent(name)}`
 }
