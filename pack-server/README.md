@@ -59,6 +59,10 @@ data/       ← 长期状态：证书、jobs.json、docker.json、图标、启�
 
 三个目录都可被 `OUTPUT_DIR` / `CACHE_DIR` / `DATA_DIR` 覆盖。
 
+**从旧版升级**：老版本的数据可能留在 exe 上一级的 `data/`（那时 exe 跑在子目录里）。
+没显式设 `DATA_DIR` 时，若新位置为空、旧位置有真实数据（`keystores/index.json`、`jobs.json`、
+`appkeys.json` 之一非空），会自动沿用旧目录并在日志里打印，避免升级后证书和记录"消失"。
+
 ### 构建
 
 **改了前端代码**后要重新构建（前端是编译进 exe 的）：

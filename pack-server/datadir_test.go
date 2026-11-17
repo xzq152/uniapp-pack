@@ -72,6 +72,27 @@ func TestHasUserDataIgnoresEmptyFiles(t *testing.T) {
 	}
 }
 
+// exe 放在盘根或顶层目录时，不能把 "上一级" 算到别的盘去
+func TestAdoptLegacyDataDirNoParent(t *testing.T) {
+	// base 与 parent 相同的情形
+	cur := filepath.Join("D:", "data")
+	got := adoptLegacyDataDir("D:", cur)
+	if got != cur {
+		t.Fatalf("顶层目录应保持 %q，实际 %q", cur, got)
+	}
+}
+
+// 旧目录与新目录恰好相同时不应重复判断
+func TestAdoptLegacyDataDirSamePath(t *testing.T) {
+	tmp := t.TempDir()
+	// base = tmp/child，parent = tmp，legacy = tmp/data，current 也是 tmp/data
+	cur := filepath.Join(tmp, "data")
+	got := adoptLegacyDataDir(filepath.Join(tmp, "data"), cur)
+	if got != cur {
+		t.Fatalf("同一路径应原样返回，实际 %q", got)
+	}
+}
+
 func writeFile(t *testing.T, path, body string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

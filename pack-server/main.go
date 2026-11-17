@@ -82,8 +82,9 @@ func defaultConfig(base string) Config {
 	return cfg
 }
 
-// adoptLegacyDataDir 找一个含真实数据的旧 data/ 目录。
-// 返回空字符串表示新位置可以直接用。
+// adoptLegacyDataDir 决定最终用哪个 data 目录：
+// 新位置已有数据、或旧位置没数据时返回 current（新位置）；
+// 只有"新位置空着、旧位置有真实数据"时才返回旧路径。
 func adoptLegacyDataDir(base, current string) string {
 	// 新位置已经有数据 → 用它，不要乱动
 	if hasUserData(current) {
