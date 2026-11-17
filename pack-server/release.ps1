@@ -47,6 +47,18 @@ Step 'Compile single-file exe'
 $dist = Join-Path $root 'dist'
 if (-not (Test-Path $dist)) { New-Item -ItemType Directory $dist | Out-Null }
 $exe = Join-Path $dist 'uniapp-pack.exe'
+
+# Generate the Windows resource object (icon + version info) before building.
+# Without it the exe shows a blank default icon in Explorer.
+$syso = Join-Path $root 'rsrc_windows_amd64.syso'
+if (-not (Test-Path $syso)) {
+  Write-Host '  generating icon/version resources...'
+  & (Join-Path $root 'mkres.bat') | Out-Null
+}
+if (-not (Test-Path $syso)) {
+  Write-Host '  [warn] rsrc not generated, exe will have no icon' -ForegroundColor Yellow
+}
+
 & go build -ldflags '-H=windowsgui -s -w' -o $exe .
 if ($LASTEXITCODE -ne 0) { Fail 'go build failed' }
 

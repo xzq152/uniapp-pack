@@ -39,9 +39,24 @@
 | 已有本程序在跑 | 把已有窗口叫到前面（或直接开页面），新进程立即退出 |
 | 端口被**别的程序**占用 | 弹框提示「端口 8080 已被其他程序占用」，并说明可用 `PORT` 换端口 |
 
-- 托盘图标是 Android 机器人头（Material Design Icons `android`，Apache-2.0，填充 `#3DDC84`）；
-  源图 `tray.svg`，`tray.ico` 含 16/24/32/48/64 五种尺寸，编译时嵌入，
-  运行时写临时文件用 `LoadImage` 加载（直接塞整个 .ico 给 `CreateIconFromResourceEx` 会失败并退回系统默认图标）
+### 图标
+
+两个图标分开，都在 `assets/`：
+
+| 文件 | 用途 | 来源 |
+|---|---|---|
+| `app.ico` | **exe 图标**（资源管理器里看到的那个） | 本项目的 `icon.html` 渲染 → `mkico` 生成 7 种尺寸 |
+| `tray.ico` | 托盘小图标 | Material Design Icons `android`（Apache-2.0） |
+
+- 图形本身是 Material Design Icons 的 `android`（Apache-2.0，可免费商用）；
+  蓝色渐变底 `#0052D9 → #4B8BFF` 与圆角是本项目加的，和网页端顶栏 logo 一致
+- exe 图标靠 **Windows 资源节** 注入：`mkres.bat` 调 `go-winres` 生成
+  `rsrc_windows_amd64.syso`，Go 链接器会自动把它嵌进 exe（这是官方支持的机制）
+- `*.syso` 已加进 `.gitignore`，因为它是可再生的构建产物；`build.bat` / `release.ps1`
+  都会在编译前自动调 `mkres.bat`，缺工具时会降级为"没有图标"但**不阻塞构建**
+- 改图标的完整步骤见 [`assets/README.md`](assets/README.md)
+- 托盘图标运行时写临时文件用 `LoadImage` 加载（直接塞整个 .ico 给 `CreateIconFromResourceEx`
+  会失败并静默退回系统默认图标）
 
 ### 目录布局
 
@@ -398,7 +413,11 @@ manifest.json 是被裁剪过的**，不含 `app-plus.distribute.android`：
 main_windows.go           Windows 入口：单实例（互斥体）→ 起服务 → 托盘 → 弹窗 → 消息循环
 main_other.go             其它平台入口：前台跑服务（没有托盘）
 tray_windows.go           托盘图标、右键菜单、启动弹窗（Win32 调用，无第三方库）
-tray.ico                  托盘图标（编译时嵌入）
+assets/                   图标资源：app.ico（exe 图标）/ tray.ico / 源图与说明
+  icon.html               渲染 icon-512.png 的源文件（Chrome 无头截图）
+  README.md               图标来源、许可、重新生成步骤
+tools/mkico/main.go       生成多尺寸 ico 的小工具（零依赖，build tag ignore）
+mkres.bat                 生成 rsrc_windows_amd64.syso（exe 图标 + 版本信息）
 main.go                   配置与路由：newServer() 组装 HTTP 服务
 store.go                  数据层（任务、证书、回收站、清理策略）
 api.go                    所有 HTTP 接口

@@ -157,7 +157,7 @@ type notifyIconData struct {
 	hBalloonIcon     uintptr
 }
 
-//go:embed tray.ico
+//go:embed assets/tray.ico
 var trayICO []byte
 
 var (

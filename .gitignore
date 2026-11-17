@@ -18,6 +18,8 @@ pack-server/cache/
 # 编辑器/构建工具的备份残片（pack-server.exe~ 之类）
 *.*~
 *.exe~
+# Windows 资源对象（图标/版本信息），由 pack-server/mkres.bat 自动生成
+*.syso
 # 发版脚本的产物目录
 pack-server/dist/
 # 调试留痕

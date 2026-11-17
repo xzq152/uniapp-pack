@@ -33,6 +33,9 @@ call npm run build
 if errorlevel 1 ( popd & echo [x] 前端构建失败 & pause & exit /b 1 )
 popd
 
+echo [*] 生成 exe 图标与版本资源...
+call mkres.bat
+
 echo [*] 编译单文件 exe（服务 + 托盘，无控制台窗口）...
 go build -ldflags "-H=windowsgui -s -w" -o uniapp-pack.exe .
 if errorlevel 1 ( echo [x] 编译失败 & pause & exit /b 1 )

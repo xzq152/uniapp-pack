@@ -142,7 +142,9 @@ uniapp-pack/
 │   ├── main_windows.go       Windows 入口：单实例 → 起服务 → 托盘 → 弹窗 → 消息循环
 │   ├── main_other.go         其它平台入口：前台跑服务（无托盘）
 │   ├── tray_windows.go       托盘图标 / 右键菜单 / 启动弹窗（原生 Win32，无第三方库）
-│   ├── tray.ico              托盘图标（编译时嵌入）
+│   ├── assets/               图标资源：app.ico（exe 图标）/ tray.ico / 源图与说明
+│   ├── tools/mkico/          生成多尺寸 ico 的小工具（零依赖）
+│   ├── mkres.bat             生成 exe 图标与版本资源的资源节
 │   ├── main.go               配置与路由：newServer() 组装 HTTP 服务
 │   ├── api.go                所有 HTTP 接口
 │   ├── build.go              打包流程编排（docker cp / exec / 产物收集）
