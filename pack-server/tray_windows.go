@@ -598,13 +598,12 @@ func hit(r rect, x, y int32) bool {
 	return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom
 }
 
-// DrawText flags（值来自 winuser.h，写错会静默变成别的效果）
+// DrawText flags（值来自 winuser.h，写错会静默变成别的效果）。
+// 只列出实际用到的：文字一律左对齐或居中、单行、不做 & 前缀解析，
+// 垂直方向靠自己用 DT_CALCRECT 量高度后算，所以不需要 DT_VCENTER/DT_RIGHT。
 const (
-	dtTop        = 0x00000000
 	dtLeft       = 0x00000000
 	dtCenter     = 0x00000001
-	dtRight      = 0x00000002
-	dtVCenter    = 0x00000004
 	dtSingleLine = 0x00000020
 	dtNoPrefix   = 0x00000800
 	dtCalcRect   = 0x00000400
