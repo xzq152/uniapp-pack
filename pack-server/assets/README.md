@@ -14,14 +14,16 @@
 
 图形本身是 **Material Design Icons** 的 `android` 图标：
 
-- 项目：<https://pictogrammers.com/library/mdi/>
-- 许可：**Apache License 2.0**（可免费商用、可修改、可再分发，需保留版权声明）
+- 项目：<https://pictogrammers.com/library/mdi/>（维护方 Pictogrammers）
+- 许可：**Apache License 2.0**
+  （[官方许可说明](https://pictogrammers.com/docs/general/license/)明确列出
+  Material Design Icons 为 Apache License 2.0；可免费商用、可修改、可再分发）
 - 原始 SVG 路径：`https://api.iconify.design/mdi/android.svg`
 
 配色（蓝色渐变 `#0052D9 → #4B8BFF` + 白色图形）是本项目自己加的，
 与网页端顶栏 logo 的视觉保持一致；圆角与渐变部分不来自 MDI。
 
-> Apache-2.0 要求保留声明。上面的项目地址与许可信息即为归属声明；
+> Apache-2.0 要求保留版权与许可声明。上面的项目地址与许可信息即为归属声明；
 > 若要把本项目再分发，请一并保留这段说明。
 
 ## 重新生成

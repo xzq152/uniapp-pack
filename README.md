@@ -175,3 +175,13 @@ uniapp-pack/
 > 里面含**私钥 `.jks`、明文证书口令、DCloud appkey 和产物 APK**，已在 `.gitignore` 中排除，别提交。
 > `data/docker.json` 记录页面上切换过的 Docker 地址（优先于 `DOCKER_HOST`）。
 > 本机当前部署在 `D:\uniapp-pack-go`，`E:\uniapp-pack` 是代码归档副本。
+
+## 第三方资源
+
+| 资源 | 许可 | 用途 |
+|---|---|---|
+| [Material Design Icons](https://pictogrammers.com/library/mdi/) 的 `android` | Apache-2.0 | 应用图标与托盘图标的图形部分（蓝底渐变与圆角为本项目所加） |
+| [Vue 3](https://vuejs.org/) / [TDesign Vue Next](https://tdesign.tencent.com/) | MIT | 前端框架与组件库 |
+| [DCloud 离线 SDK](https://nativesupport.dcloud.net.cn/) | DCloud 授权 | 打包镜像内，**不随本仓库分发**，需自行下载 |
+
+图标来源与重新生成步骤见 [`pack-server/assets/README.md`](pack-server/assets/README.md)。
