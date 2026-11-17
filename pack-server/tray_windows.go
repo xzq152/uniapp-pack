@@ -100,6 +100,7 @@ const (
 	idiApplication = 32512
 	swShow         = 5
 	swHide         = 0
+	swRestore      = 9 // 从最小化状态还原（SW_SHOW 对最小化窗口无效）
 )
 
 type wndClassEx struct {
@@ -473,9 +474,10 @@ const welcomeClass = "uniappPackWelcomeWnd"
 
 // 按钮区域（客户区坐标），用于命中测试
 var (
-	btnOpen   rect
-	btnFolder rect
-	btnExit   rect
+	btnOpen     rect
+	btnFolder   rect
+	btnMinimize rect
+	btnExit     rect
 )
 
 type cred struct{}
@@ -486,7 +488,8 @@ func showWelcomeWindow() {
 		uintptr(unsafe.Pointer(utf16Ptr(welcomeClass))),
 		uintptr(unsafe.Pointer(utf16Ptr(appTitle))))
 	if r, _, _ := pIsWindow.Call(h); r != 0 {
-		pShowWindow.Call(h, swShow)
+		// 用 SW_RESTORE(9)：如果窗口之前是最小化状态，SW_SHOW 只显示但不还原
+		pShowWindow.Call(h, swRestore)
 		pSetForegroundWin.Call(h)
 		return
 	}
@@ -504,7 +507,9 @@ func showWelcomeWindow() {
 		return
 	}
 
-	const w, hgt = 460, 300
+	// 宽度要容得下四个按钮：打开页面(104)+间距+打开产物目录(132) + 间距 +
+	// 最小化到托盘(124)+间距+退出(72)，再留两侧各 24 的边距
+	const w, hgt = 560, 300
 	sw, _, _ := pGetSystemMetrics.Call(0) // SM_CXSCREEN
 	sh, _, _ := pGetSystemMetrics.Call(1) // SM_CYSCREEN
 	x := (int(sw) - w) / 2
@@ -557,14 +562,16 @@ func welcomeWndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 			openURL(localURL())
 		case hit(btnFolder, x, y):
 			openOutputDir()
+		case hit(btnMinimize, x, y):
+			minimizeToTray(hwnd)
 		case hit(btnExit, x, y):
 			shutdown()
 		}
 		return 0
 	case wmClose:
-		// 关窗口不退出程序：服务继续在托盘跑
-		pShowWindow.Call(hwnd, swHide)
-		welcomeOpen = false
+		// 点右上角 × 或按 Alt+F4：等同「最小化到托盘」，服务继续跑。
+		// 真正退出请用「退出」按钮或托盘右键菜单。
+		minimizeToTray(hwnd)
 		return 0
 	case wmDestroy:
 		welcomeOpen = false
@@ -575,39 +582,95 @@ func welcomeWndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 	return ret
 }
 
+// minimizeToTray 隐藏窗口、服务继续在托盘运行，并弹一次气泡说明去哪了
+func minimizeToTray(hwnd uintptr) {
+	pShowWindow.Call(hwnd, swHide)
+	welcomeOpen = false
+	// 气泡提示一次，避免用户以为程序被关掉了
+	if hWndTray != 0 {
+		n := trayData(nifTip|nifInfo, "已最小化到托盘",
+			"服务仍在运行。双击托盘图标可重新打开此窗口，右键菜单可退出。")
+		pShellNotifyIconW.Call(nimModify, uintptr(unsafe.Pointer(n)))
+	}
+}
+
 func hit(r rect, x, y int32) bool {
 	return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom
 }
 
-// drawText 在指定矩形里画一行文字
-func drawText(hdc uintptr, text string, r *rect, size int32, bold bool, color uint32, center bool) {
-	weight := int32(400)
+// DrawText flags（值来自 winuser.h，写错会静默变成别的效果）
+const (
+	dtTop        = 0x00000000
+	dtLeft       = 0x00000000
+	dtCenter     = 0x00000001
+	dtRight      = 0x00000002
+	dtVCenter    = 0x00000004
+	dtSingleLine = 0x00000020
+	dtNoPrefix   = 0x00000800
+	dtCalcRect   = 0x00000400
+)
+
+// makeFont 建一个中文字体，返回句柄（调用方负责 DeleteObject）
+func makeFont(size int32, bold bool) uintptr {
+	weight := uintptr(400)
 	if bold {
 		weight = 700
 	}
-	hFont, _, _ := pCreateFontW.Call(
-		uintptr(-size), 0, 0, 0, uintptr(weight), 0, 0, 0,
+	h, _, _ := pCreateFontW.Call(
+		uintptr(-size), 0, 0, 0, weight, 0, 0, 0,
 		134, // GB2312_CHARSET，避免中文变方块
 		0, 0, 5, 0,
 		uintptr(unsafe.Pointer(utf16Ptr("Microsoft YaHei UI"))))
+	return h
+}
+
+// drawText 在矩形里画一行文字，**按文字实际渲染高度垂直居中**。
+//
+// 为什么不用 DT_VCENTER：它按字体行高（含 ascent/descent 留白）居中，
+// 对中文汉字来说行高比字形本身高不少，视觉上会明显偏上——这就是"没有上下居中"的原因。
+// 这里先用 DT_CALCRECT 量出这句话的真实高度，再把矩形往下挪到正中。
+func drawText(hdc uintptr, text string, r *rect, size int32, bold bool, color uint32, center bool) {
+	hFont := makeFont(size, bold)
+	if hFont == 0 {
+		return
+	}
 	old, _, _ := pSelectObject.Call(hdc, hFont)
 	pSetTextColor.Call(hdc, uintptr(color))
 	pSetBkMode.Call(hdc, 1) // TRANSPARENT
-	flags := uint32(0x00000004|0x00000080|0x00000020) // DT_VCENTER|DT_SINGLELINE|DT_CENTER... 见下
+
+	horiz := uint32(dtLeft)
 	if center {
-		flags = 0x00000001 | 0x00000004 | 0x00000020 | 0x00000080
-	} else {
-		flags = 0x00000004 | 0x00000020 | 0x00000080
+		horiz = dtCenter
 	}
+
+	// 1) 先量真实高度：DT_CALCRECT 只计算不绘制
+	measure := *r
 	pDrawTextW.Call(hdc,
 		uintptr(unsafe.Pointer(utf16Ptr(text))),
 		^-uintptr(0),
-		uintptr(unsafe.Pointer(r)),
-		uintptr(flags))
+		uintptr(unsafe.Pointer(&measure)),
+		uintptr(horiz|dtSingleLine|dtNoPrefix|dtCalcRect))
+	textH := measure.bottom - measure.top
+
+	// 2) 按真实高度重新算垂直位置（留 1px 视觉修正，中文字形通常略偏上）
+	target := *r
+	if textH > 0 && textH < (r.bottom-r.top) {
+		offset := ((r.bottom - r.top) - textH) / 2
+		target.top = r.top + offset
+		target.bottom = target.top + textH
+	}
+
+	pDrawTextW.Call(hdc,
+		uintptr(unsafe.Pointer(utf16Ptr(text))),
+		^-uintptr(0),
+		uintptr(unsafe.Pointer(&target)),
+		uintptr(horiz|dtSingleLine|dtNoPrefix))
+
 	pSelectObject.Call(hdc, old)
 	pDeleteObject.Call(hFont)
 }
 
+// drawButton 画一个纯色按钮并把文字垂直居中
 func drawButton(hdc uintptr, label string, r rect, primary bool) uint32 {
 	var bg uint32 = 0x00F2F3F5
 	var fg uint32 = 0x002A2F36
@@ -619,7 +682,9 @@ func drawButton(hdc uintptr, label string, r rect, primary bool) uint32 {
 	rr := r
 	pFillRect.Call(hdc, uintptr(unsafe.Pointer(&rr)), brush)
 	pDeleteObject.Call(brush)
-	tr := rect{r.left, r.top + 9, r.right, r.bottom}
+	// 直接把整个按钮矩形交给 drawText，由它按真实字高居中；
+	// 不再手写 +9 这类魔法偏移（那正是之前按钮文字不居中的原因）
+	tr := rect{r.left, r.top, r.right, r.bottom}
 	drawText(hdc, label, &tr, 15, true, fg, true)
 	return bg
 }
@@ -646,49 +711,56 @@ func paintWelcome(hwnd uintptr) {
 	pDeleteObject.Call(brush)
 
 	// 标题
-	t := rect{24, 18, full.right - 24, 52}
+	t := rect{24, 16, full.right - 24, 50}
 	drawText(hdc, "打包服务已启动", &t, 22, true, 0x001C2126, false)
 
 	// 提示
-	sub := rect{24, 52, full.right - 24, 78}
+	sub := rect{24, 50, full.right - 24, 76}
 	drawText(hdc, "保持这个程序在运行即可；关掉本窗口不影响，服务会留在托盘。", &sub, 13, false, 0x005A6472, false)
 
-	// 地址块
-	y := int32(88)
-	lbl := rect{24, y, 100, y + 24}
+	// 地址块：标签和值用**同一个矩形高度**，这样两列文字基线一致。
+	// 之前标签用 13 号字、值用 14 号字且各行高只有 24，中文行高不够，
+	// 再加上 VCENTER 按字体行高算，就出现了"标签比值高半行"的错位。
+	const rowH = 26
+	labelRight := int32(96)
+
+	y := int32(84)
+	lbl := rect{24, y, labelRight, y + rowH}
 	drawText(hdc, "本机访问", &lbl, 13, false, 0x008A94A1, false)
-	v1 := rect{104, y, full.right - 24, y + 24}
+	v1 := rect{104, y, full.right - 24, y + rowH}
 	drawText(hdc, localURL(), &v1, 14, true, 0x001C2126, false)
 
-	y += 26
-	lbl2 := rect{24, y, 100, y + 24}
+	y += rowH
+	lbl2 := rect{24, y, labelRight, y + rowH}
 	drawText(hdc, "局域网", &lbl2, 13, false, 0x008A94A1, false)
-	v2 := rect{104, y, full.right - 24, y + 24}
+	v2 := rect{104, y, full.right - 24, y + rowH}
 	drawText(hdc, lanURL(), &v2, 14, true, 0x001C2126, false)
 
-	y += 26
-	lbl3 := rect{24, y, 100, y + 24}
+	y += rowH
+	lbl3 := rect{24, y, labelRight, y + rowH}
 	drawText(hdc, "产物目录", &lbl3, 13, false, 0x008A94A1, false)
-	v3 := rect{104, y, full.right - 24, y + 24}
+	v3 := rect{104, y, full.right - 24, y + rowH}
 	drawText(hdc, outputDir, &v3, 12, false, 0x005A6472, false)
 
-	// 按钮排布：左侧主按钮 + 右侧两个次按钮，各留 10px 间距。
-	// 之前用递减 br 的写法算错了一次，导致按钮重叠，这里改成显式的左边界推进。
-	const bw, bh, gap = 104, 34, 10
-	by := int32(full.bottom) - 22 - bh
-	left := int32(24)
+	// 按钮排布：四个按钮等宽平铺，视觉上最整齐。
+	// 之前按文字长度给不同宽度（104/132/124/72），实际画出来参差不齐；
+	// 等宽 + 均分间距看着更稳，也不怕以后改文案。
+	const bh, gap = 34, 10
+	const btnN = 4
+	by := int32(full.bottom) - 20 - bh
+	margin := int32(24)
+	avail := full.right - margin*2 - gap*(btnN-1)
+	bw := avail / btnN
 
-	btnOpen = rect{left, by, left + bw, by + bh}
-	left += bw + gap
-	btnFolder = rect{left, by, left + bw + 24, by + bh}
+	btnOpen = rect{margin, by, margin + bw, by + bh}
+	btnFolder = rect{btnOpen.right + gap, by, btnOpen.right + gap + bw, by + bh}
+	btnMinimize = rect{btnFolder.right + gap, by, btnFolder.right + gap + bw, by + bh}
+	btnExit = rect{btnMinimize.right + gap, by, btnMinimize.right + gap + bw, by + bh}
 
-	// 退出放最右，符合"危险操作靠边"的习惯
-	exitRight := int32(full.right) - 24
-	btnExit = rect{exitRight - 72, by, exitRight, by + bh}
-
-	drawButton(hdc, "退出", btnExit, false)
-	drawButton(hdc, "打开产物目录", btnFolder, false)
 	drawButton(hdc, "打开页面", btnOpen, true)
+	drawButton(hdc, "打开产物目录", btnFolder, false)
+	drawButton(hdc, "最小化到托盘", btnMinimize, false)
+	drawButton(hdc, "退出", btnExit, false)
 
 	pEndPaint.Call(hwnd, uintptr(unsafe.Pointer(&ps)))
 }
