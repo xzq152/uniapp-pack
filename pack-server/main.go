@@ -58,7 +58,7 @@ func envInt(k string, def int) int {
 //   - cache/ 可以整个删掉而不会丢配置，出问题让用户删它最省事
 //   - data/  存证书和任务记录，删了要重新配，不能混在缓存里被误删
 func defaultConfig(base string) Config {
-	return Config{
+	cfg := Config{
 		Port: envOr("PORT", "8080"),
 		// 三个目录都允许用环境变量覆盖，方便老用户沿用原来的 DATA_DIR
 		OutputDir:   envOr("OUTPUT_DIR", filepath.Join(base, "output")),
@@ -73,6 +73,53 @@ func defaultConfig(base string) Config {
 		KeepAPKs:    envInt("KEEP_APK", 5),
 		KeepJobs:    envInt("KEEP_JOBS", 20),
 	}
+	// 老版本把证书/记录放在 exe 上一级的 data/（当时 exe 在子目录里跑）。
+	// 没显式指定 DATA_DIR 时，如果新位置还是空的、而旧位置有数据，就沿用旧的，
+	// 避免升级后"证书和任务记录凭空消失"。
+	if os.Getenv("DATA_DIR") == "" {
+		cfg.DataDir = adoptLegacyDataDir(base, cfg.DataDir)
+	}
+	return cfg
+}
+
+// adoptLegacyDataDir 找一个含真实数据的旧 data/ 目录。
+// 返回空字符串表示新位置可以直接用。
+func adoptLegacyDataDir(base, current string) string {
+	// 新位置已经有数据 → 用它，不要乱动
+	if hasUserData(current) {
+		return current
+	}
+	// 候选：exe 上一级的 data/（旧版结构的典型位置）
+	parent := filepath.Dir(base)
+	if parent == base || parent == "." || parent == string(filepath.Separator) {
+		return current
+	}
+	legacy := filepath.Join(parent, "data")
+	if legacy == current {
+		return current
+	}
+	if hasUserData(legacy) {
+		log.Printf("检测到旧版数据目录 %s（含证书/记录），已沿用它", legacy)
+		return legacy
+	}
+	return current
+}
+
+// hasUserData 判断目录里是否有值得保留的东西（证书或任务记录）
+func hasUserData(dir string) bool {
+	if dir == "" {
+		return false
+	}
+	for _, p := range []string{
+		filepath.Join(dir, "keystores", "index.json"),
+		filepath.Join(dir, "jobs.json"),
+		filepath.Join(dir, "appkeys.json"),
+	} {
+		if st, err := os.Stat(p); err == nil && st.Size() > 2 {
+			return true
+		}
+	}
+	return false
 }
 
 // newServer 组装好完整的 HTTP 服务（路由、静态资源、清理）。
