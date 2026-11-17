@@ -4,6 +4,10 @@
 //
 // 用法：go run ./tools/mkico/main.go -in assets/icon-512.png -out assets/app.ico -sizes 16,24,32,48,64,128,256
 //
+// 注意要用「文件路径 main.go」而不是包路径 ./tools/mkico：
+// 本文件带 //go:build ignore，按包引用会被构建约束排除。
+// 这个 tag 是有意的——它让 go build ./... 不把这个工具编进主程序。
+//
 // 为什么自己写：本机没有 ImageMagick，项目也坚持零第三方依赖。
 // ICO 容器格式很简单——头 + 目录项 + 每张 PNG 原样塞进去即可
 // （Vista 起支持 PNG 压缩的 ICO，资源管理器和托盘都能正确显示）。

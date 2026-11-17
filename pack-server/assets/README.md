@@ -29,15 +29,21 @@
 改了图标源图之后：
 
 ```powershell
+# 以下命令都在 pack-server/ 目录下执行
+
 # 1) 改 assets/icon.html（改颜色/形状），用 Chrome 无头渲染出 512 源图
+#    输出路径用绝对路径，相对路径 Chrome 可能基于别的工作目录解析而找不到
+$root = (Get-Location).Path
 & "$env:LOCALAPPDATA\Google\Chrome\Application\chrome.exe" `
   --headless=new --disable-gpu --hide-scrollbars `
   --default-background-color=00000000 --window-size=512,512 `
-  --screenshot="assets\icon-512.png" "file:///$(Resolve-Path assets\icon.html)"
+  --screenshot="$root\assets\icon-512.png" "file:///$($root -replace '\\','/')/assets/icon.html"
 
 # 2) 用改好的 PNG 重新生成多尺寸 ico
 #    （mkico 是本项目自带的小工具，零第三方依赖）
-go run ./tools/mkico -in assets/icon-512.png -out assets/app.ico -sizes 16,24,32,48,64,128,256
+#    注意：必须写文件路径 main.go —— 它带 //go:build ignore，
+#    用包路径 `./tools/mkico` 会被构建约束排除，报 "build constraints exclude all Go files"
+go run ./tools/mkico/main.go -in assets/icon-512.png -out assets/app.ico -sizes 16,24,32,48,64,128,256
 
 # 3) 删掉旧的资源对象，让构建脚本重新生成
 Remove-Item rsrc_windows_amd64.syso -ErrorAction SilentlyContinue
@@ -45,6 +51,9 @@ Remove-Item rsrc_windows_amd64.syso -ErrorAction SilentlyContinue
 # 4) 重新构建（会自动调 mkres.bat 生成图标资源）
 .\release.ps1
 ```
+
+> `mkico` 的输出是可复现的：同样的源图会生成字节完全相同的 ico
+> （已验证 MD5 一致）。所以改了图标提交时，`app.ico` 的变化就是真实变化。
 
 托盘图标（`tray.ico`）目前是独立的一份，改它同样用 `mkico` 生成即可。
 两份分开是因为托盘图标在深色任务栏上要更小更简洁，和 exe 大头标的观感不同。
