@@ -6,12 +6,19 @@
     </div>
     <t-progress :percentage="state.job.progress" :status="status" :label="false" :stroke-width="6" />
 
-    <div v-if="finished" class="done-box" style="margin-top: 12px">
-      <t-icon
-        :name="ok ? 'check-circle-filled' : 'error-circle-filled'"
-        size="22px"
-        :style="{ color: ok ? '#12a150' : '#d54941' }"
-      />
+    <div
+      v-if="finished"
+      v-motion="doneMotion"
+      class="done-box"
+      style="margin-top: 12px"
+    >
+      <span
+        class="done-icon"
+        :class="ok ? 'ok' : 'bad'"
+        v-motion="iconMotion"
+      >
+        <t-icon :name="ok ? 'check-circle-filled' : 'error-circle-filled'" size="22px" />
+      </span>
       <div class="t">
         <div class="n">{{ ok ? apkLabel : '构建失败' }}</div>
         <div class="m">{{ ok ? doneMeta : friendlyError(state.job.error) }}</div>
@@ -32,6 +39,17 @@ import { fmtBytes, friendlyError } from '../utils'
 
 const finished = computed(() => ['done', 'failed'].includes(state.job.status))
 const ok = computed(() => state.job.status === 'done')
+
+// 完成态入场：整体淡入上移，图标再带一点弹性放大。
+// 用对象传给 v-motion（写成 :initial/:enter 属性会把这些属性原样输出到 DOM）。
+const doneMotion = {
+  initial: { opacity: 0, y: 10 },
+  enter: { opacity: 1, y: 0, transition: { duration: 320 } },
+}
+const iconMotion = {
+  initial: { scale: 0.6, opacity: 0 },
+  enter: { scale: 1, opacity: 1, transition: { delay: 100, duration: 380 } },
+}
 
 // 只在真正有进度后展示，避免空占位置
 const visible = computed(() => !!state.job.id && (state.job.progress > 0 || finished.value))
@@ -96,4 +114,12 @@ function retry() {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* 完成图标：包一层好做缩放动画，颜色按成功/失败区分 */
+.done-icon {
+  display: inline-flex; align-items: center; justify-content: center;
+  flex: none;
+}
+.done-icon.ok { color: #12a150; }
+.done-icon.bad { color: #d54941; }
 </style>

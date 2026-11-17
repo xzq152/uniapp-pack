@@ -68,12 +68,33 @@ TARGET_SDK=${TARGET_SDK:-}
 # 逗号分隔的权限名（不带 android.permission. 前缀），如 CAMERA,POST_NOTIFICATIONS
 ADD_PERMISSIONS=${ADD_PERMISSIONS:-}
 DEL_PERMISSIONS=${DEL_PERMISSIONS:-}
+# 打包 CPU 架构，逗号分隔，如 arm64-v8a,armeabi-v7a
+#
+# 默认只打真机常用的两个架构，**不含 x86/x86_64**：
+# 那两个是给模拟器用的，真机完全用不到，但会让包体多出近 34MB（未压缩）/ 约 3.8MB（压缩后）。
+# 需要兼容模拟器调试时，页面显式传 x86/x86_64 即可。
+ABI_FILTERS=${ABI_FILTERS:-arm64-v8a,armeabi-v7a}
 # 防呆：非纯数字一律当作没填，避免拼出非法 gradle 语句
 case "$MIN_SDK" in ''|*[!0-9]*) MIN_SDK="" ;; esac
 case "$TARGET_SDK" in ''|*[!0-9]*) TARGET_SDK="" ;; esac
 # set -e 下不能用 a && b && c 的短路写法，条件不成立会返回 1 触发 ERR trap
 if [ -n "$MIN_SDK" ] && [ "$MIN_SDK" -lt 16 ]; then MIN_SDK=""; fi
 if [ -n "$TARGET_SDK" ] && [ "$TARGET_SDK" -lt 16 ]; then TARGET_SDK=""; fi
+
+# ABI 白名单：只保留 Android 认可的架构名，去掉空格与非法值，避免注入 gradle 语法
+ABI_LIST=""
+_old_ifs="$IFS"; IFS=','
+for _a in $ABI_FILTERS; do
+  _a=$(printf '%s' "$_a" | tr -d ' \t\r')
+  case "$_a" in
+    arm64-v8a|armeabi-v7a|armeabi|x86|x86_64) ABI_LIST="${ABI_LIST}${ABI_LIST:+,}\"${_a}\"" ;;
+    '') ;;
+    *) warn "忽略非法 ABI: $_a" ;;
+  esac
+done
+IFS="$_old_ifs"
+# 全非法时回落到默认两架构，保证不会产出「无 any ABI」的坏包
+[ -n "$ABI_LIST" ] || ABI_LIST='"arm64-v8a","armeabi-v7a"'
 
 START_TS=$(date +%s)
 elapsed() { local e=$(( $(date +%s) - START_TS )); printf '%dm%02ds' $((e/60)) $((e%60)); }
@@ -274,13 +295,40 @@ _cfg.keyAlias      = "__KEYALIAS__"
 _cfg.keyPassword   = "__KEYPASS__"
 _cfg.v1SigningEnabled = true
 _cfg.v2SigningEnabled = true
+// v3 签名属性名在 AGP 各版本不一致：
+//   · AGP 7.x/8.x 官方属性是 enableV3Signing
+//   · 不存在 v3SigningEnabled 这个别名（v1/v2 才有 *SigningEnabled 别名）
+// 实测 AGP 8.7.3 下写 v3SigningEnabled 会抛 MissingPropertyException 直接构建失败。
+// 这里用 try/catch 依次尝试两种写法，任何 AGP 版本都不会因属性名导致打包中断。
+// v3 主要提供密钥轮替能力；若某版本完全不支持，跳过也不影响安装（v2 已满足 Android 11+ 要求）。
+try { _cfg.enableV3Signing = true }
+catch (Exception e1) {
+    try { _cfg.v3SigningEnabled = true }
+    catch (Exception e2) { /* 该 AGP 不支持显式 v3，保持默认 */ }
+}
 
 android.defaultConfig.applicationId = "__PACKAGE__"
 android.defaultConfig.versionCode   = __VCODE__
 android.defaultConfig.versionName   = "__VNAME__"
+// 打包的 CPU 架构：由页面传入，默认 arm64-v8a + armeabi-v7a（不含 x86）。
+// 不限制的话 DCloud 模板会把 x86/x86_64 一起打进去（那是模拟器架构），
+// 让包体凭空多出近 34MB 未压缩体积。
+//
+// 注意：ndk {} 是 defaultConfig 的方法，必须下沉到 android.defaultConfig 里，
+// 不能写在脚本根节点 —— 否则报「Could not find method ndk() for arguments on project」。
+android.defaultConfig.ndk {
+    abiFilters __ABIFILTERS__
+}
 
 android.buildTypes.each { bt ->
-    if (bt.name == "release") { bt.signingConfig = _cfg }
+    if (bt.name == "release") {
+        bt.signingConfig = _cfg
+        // 发布包关闭 debuggable（云端包是 false，本地此前未设置＝等价 true）：
+        // 开着 debuggable 的应用可被附加调试器、读取私有数据，
+        // 部分应用市场静态扫描会直接判定为不合格包。
+        bt.debuggable = false
+        bt.jniDebuggable = false
+    }
 }
 GROOVY
 
@@ -316,6 +364,10 @@ GROOVY
     -e "s#__VCODE__#${APP_VERSION_CODE}#" \
     -e "s#__VNAME__#${VN}#" \
     "$WORK_DIR/override.gradle"
+
+  # ABI 列表含引号，单独替换（上面的通用转义会把引号弄坏）
+  perl -i -pe "s#__ABIFILTERS__#${ABI_LIST}#" "$WORK_DIR/override.gradle"
+  ok "打包架构         = ${ABI_LIST//\"/}"
 
   grep -q "override.gradle" "$APPDIR/build.gradle" 2>/dev/null || \
     printf '\n// >>> uniapp-android-builder >>>\napply from: "%s"\n' "$WORK_DIR/override.gradle" >> "$APPDIR/build.gradle"

@@ -126,10 +126,10 @@ type manifestRaw struct {
 	AppPlus *struct {
 		Distribute *struct {
 			Android *struct {
-				Packagename     string      `json:"packagename"`
-				MinSdkVersion   interface{} `json:"minSdkVersion"`
+				Packagename      string      `json:"packagename"`
+				MinSdkVersion    interface{} `json:"minSdkVersion"`
 				TargetSdkVersion interface{} `json:"targetSdkVersion"`
-				Permissions     []string    `json:"permissions"`
+				Permissions      []string    `json:"permissions"`
 			} `json:"android"`
 		} `json:"distribute"`
 		Modules map[string]interface{} `json:"modules"`
@@ -366,10 +366,12 @@ type buildReq struct {
 	Channels    []string `json:"channels"`
 
 	// 安卓原生配置（留空＝用 SDK 模板默认值）
-	MinSdk     int      `json:"minSdk"`
-	TargetSdk  int      `json:"targetSdk"`
-	AddPerms   []string `json:"addPerms"` // 要新增的权限
-	DelPerms   []string `json:"delPerms"` // 要从基线里去掉的权限
+	MinSdk    int      `json:"minSdk"`
+	TargetSdk int      `json:"targetSdk"`
+	AddPerms  []string `json:"addPerms"` // 要新增的权限
+	DelPerms  []string `json:"delPerms"` // 要从基线里去掉的权限
+	// AbiFilters 打包 CPU 架构，空＝默认 arm64-v8a,armeabi-v7a（不含 x86）
+	AbiFilters []string `json:"abiFilters"`
 }
 
 // sanitizeChannels 规范化渠道名：去空格、只留 [A-Za-z0-9_-]、去重保序，最多 12 个
@@ -419,6 +421,38 @@ func sanitizePerms(in []string) []string {
 	return out
 }
 
+// sanitizeAbiFilters 规范化 CPU 架构列表。
+//
+// 只接受 Android 实际使用的 5 个架构名（大小写敏感、连字符/下划线不能写错），
+// 去重保序；非法值丢弃。空输入返回 nil，由容器端回落到默认两架构。
+func sanitizeAbiFilters(in []string) []string {
+	// 允许的架构（与 entrypoint.sh 的白名单保持一致）
+	valid := map[string]bool{
+		"arm64-v8a":   true,
+		"armeabi-v7a": true,
+		"armeabi":     true,
+		"x86":         true,
+		"x86_64":      true,
+	}
+	out := make([]string, 0, len(in))
+	seen := map[string]bool{}
+	for _, raw := range in {
+		// 一格里可能塞了逗号分隔的多个值（前端传数组时不会，但兼容一下）
+		for _, one := range strings.Split(raw, ",") {
+			a := strings.TrimSpace(one)
+			if a == "" || seen[a] || !valid[a] {
+				continue
+			}
+			seen[a] = true
+			out = append(out, a)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 // clampSdk 只接受 16~99 的合理值，其余当「没填」处理（由 SDK 模板默认值兜底）
 func clampSdk(v int) int {
 	if v < 16 || v > 99 {
@@ -460,6 +494,7 @@ func (a *API) createJob(w http.ResponseWriter, r *http.Request) {
 	// 权限名严格校验后才会写进 AndroidManifest.xml
 	addPerms := sanitizePerms(req.AddPerms)
 	delPerms := sanitizePerms(req.DelPerms)
+	abiFilters := sanitizeAbiFilters(req.AbiFilters)
 	req.MinSdk = clampSdk(req.MinSdk)
 	req.TargetSdk = clampSdk(req.TargetSdk)
 
@@ -477,30 +512,31 @@ func (a *API) createJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	j := &Job{
-		ID:          fmt.Sprintf("j%d", time.Now().UnixNano()),
-		CreatedAt:   time.Now(),
-		Status:      "queued",
-		Progress:    0,
-		Stage:       "排队中",
-		UploadID:    req.UploadID,
-		AppID:       req.AppID,
-		AppName:     req.AppName,
-		Package:     req.Package,
-		VersionName: req.VersionName,
-		VersionCode: req.VersionCode,
-		Keystore:    req.Keystore,
-		storePass:   storePass,
-		keyAlias:    keyAlias,
-		keyPass:     keyPass,
-		AppKey:      strings.TrimSpace(req.AppKey),
-		Icon:        req.Icon,
-		Splash:      req.Splash,
-		Channels:    channels,
+		ID:           fmt.Sprintf("j%d", time.Now().UnixNano()),
+		CreatedAt:    time.Now(),
+		Status:       "queued",
+		Progress:     0,
+		Stage:        "排队中",
+		UploadID:     req.UploadID,
+		AppID:        req.AppID,
+		AppName:      req.AppName,
+		Package:      req.Package,
+		VersionName:  req.VersionName,
+		VersionCode:  req.VersionCode,
+		Keystore:     req.Keystore,
+		storePass:    storePass,
+		keyAlias:     keyAlias,
+		keyPass:      keyPass,
+		AppKey:       strings.TrimSpace(req.AppKey),
+		Icon:         req.Icon,
+		Splash:       req.Splash,
+		Channels:     channels,
 		ReqMinSdk:    req.MinSdk,
 		ReqTargetSdk: req.TargetSdk,
 		AddPerms:     addPerms,
 		DelPerms:     delPerms,
-		subs:        make(map[uint64]chan []byte),
+		AbiFilters:   abiFilters,
+		subs:         make(map[uint64]chan []byte),
 	}
 	// 记住 appkey，下次同 appid 自动带出
 	a.store.SetAppKey(req.AppID, strings.TrimSpace(req.AppKey))

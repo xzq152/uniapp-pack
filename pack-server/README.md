@@ -15,51 +15,70 @@
 
 ## 启动
 
-**双击 `启动服务.exe`** —— 不显示命令行窗口，服务在后台跑，**右下角托盘出现图标**：
+发布版是**一个 exe**：`uniapp-pack.exe`。服务端（HTTP + 内嵌前端）和托盘在同一个进程里，
+**双击即用**，不需要安装 Go / Node，也不需要别的文件。
 
-- 启动时弹一个气泡提示（带局域网地址），几秒自动消失
+- **首次双击**：弹出窗口显示「本机访问 / 局域网地址 / 产物目录」，
+  三个按钮：打开页面、打开产物目录、退出
+- **关掉弹窗不退出**：服务转到右下角托盘继续跑（这是有意设计，避免误关）
 - **双击托盘图标** → 打开打包页面
 - **右键托盘图标** → 菜单：
-  - 顶部灰字状态：`服务运行中/未运行 · 打包环境运行中/已停止`
+  - 顶部灰字状态：`服务运行中 · 端口 8080`
   - 打开打包页面
-  - 重新启动服务
-  - **停止打包环境（仅容器）** —— 只停 Docker 容器释放内存，服务继续跑
-  - **停止服务并停止镜像** —— 先停容器，再结束服务和托盘
-  - 仅停止服务（保留镜像）—— 只结束服务和托盘
-- 鼠标悬停能看到当前状态和地址
+  - 打开产物文件夹
+  - 显示地址窗口（把刚才那个弹窗再叫出来）
+  - **退出（停止服务）** —— 停 HTTP 服务并退出进程
+- 鼠标悬停托盘图标能看到当前地址
 
-**重复启动会被拦掉**：托盘宿主有单实例互斥（`Local\uniapp-pack-tray`），
-再双击只会提示「已经在运行」；如果 8080 被**别的程序**占用（探活 `/api/env` 不通），
-会明确报「端口被其他程序占用」，而不是傻等。
-带 `/open` 参数启动（桌面快捷方式用的就是这个）时，已经在运行就不弹框，直接开页面。
+**同时只会运行一个实例**：用**命名互斥体**（`Local\uniapp-pack-single-instance`）判断，
+**不靠端口探测**——端口被别的程序占用时如果还按端口判断，就会误报成「已在运行」，
+反而把真正该报的端口冲突盖掉。现在这两种情况分开处理：
+
+| 情况 | 表现 |
+|---|---|
+| 已有本程序在跑 | 把已有窗口叫到前面（或直接开页面），新进程立即退出 |
+| 端口被**别的程序**占用 | 弹框提示「端口 8080 已被其他程序占用」，并说明可用 `PORT` 换端口 |
+
 - 托盘图标是 Android 机器人头（Material Design Icons `android`，Apache-2.0，填充 `#3DDC84`）；
-  源图 `cmd/launcher/tray.svg`，`tray.ico` 含 16/24/32/48/64 五种尺寸，编译时嵌入，
-  运行时写临时文件用 `LoadImage` 加载（直接塞整个 .ico 给 `CreateIconFromResourceEx` 会失败并退回系统默认图标）
-- 托盘图标是 Android 机器人头（Material Design Icons `android`，Apache-2.0，填充 `#3DDC84`）；
-  源图 `cmd/launcher/tray.svg`，`tray.ico` 含 16/24/32/48/64 五种尺寸，编译时嵌入，
+  源图 `tray.svg`，`tray.ico` 含 16/24/32/48/64 五种尺寸，编译时嵌入，
   运行时写临时文件用 `LoadImage` 加载（直接塞整个 .ico 给 `CreateIconFromResourceEx` 会失败并退回系统默认图标）
 
-停止：双击 `停止服务.exe`（无窗口，会同时移除托盘图标并弹提示）。
-加参数 `/image` 会连打包容器一起停：`停止服务.exe /image`。
+### 目录布局
 
-**桌面快捷方式** `uni-app 安卓打包.lnk`：目标 `启动服务.exe`，参数 `/open`，
-双击 = 启动服务（已在运行则跳过）+ 打开 http://127.0.0.1:8080 。
+**产物、缓存、数据都在 exe 同级**，方便拷贝和清理：
 
-命令行方式（调试时看日志更方便）：
-
-```bash
-./uniapp-pack-server.exe          # 前台运行，会打印局域网地址
 ```
+uniapp-pack.exe
+output/     ← APK 产物（点「打开产物文件夹」就到这里）
+cache/      ← 可再生缓存：上传包、容器 config 镜像、tmp、回收站
+data/       ← 长期状态：证书、jobs.json、docker.json、图标、启动图
+```
+
+> `cache/` 可以整个删掉，只会丢当前上传的资源，不会丢配置；
+> `data/` 删了就要重新配证书。要搬到别的机器，拷 exe + `data/` 就够。
+
+三个目录都可被 `OUTPUT_DIR` / `CACHE_DIR` / `DATA_DIR` 覆盖。
+
+### 构建
 
 **改了前端代码**后要重新构建（前端是编译进 exe 的）：
 
 ```bash
-双击 build.bat            # 前端 npm run build → go build → 启动器
-# 或手动：
-cd web && npm run build && cd .. && go build -o uniapp-pack-server.exe .
+双击 build.bat            # 前端 npm run build → go build（单文件 exe）
 ```
 
-> 构建前先 `停止服务.exe`，否则 exe 被占用会报 Access is denied。
+发版（构建 + 打 tag + 上传 GitHub Release）：
+
+```powershell
+.\release.ps1                      # 只构建，产物在 dist\uniapp-pack.exe
+.\release.ps1 -Tag v1.0.0          # 构建 + 提交 + 打 tag + 推送
+.\release.ps1 -Tag v1.0.0 -Publish # 再把 exe 传到 GitHub Release
+```
+
+> `-Publish` 需要环境变量 `GH_TOKEN`（GitHub Personal Access Token，`repo` 权限）。
+> 脚本是纯 ASCII 的：Windows PowerShell 5.1 会按 GBK 读无 BOM 的 .ps1，脚本里写中文会解析失败。
+
+> 构建前先在托盘右键「退出」，否则 exe 被占用会报 Access is denied。
 
 前端热更新调试（后端照常跑在 8080）：
 
@@ -67,7 +86,7 @@ cd web && npm run build && cd .. && go build -o uniapp-pack-server.exe .
 cd web && npm run dev     # http://localhost:5173，/api 与 /d 已代理到 8080
 ```
 
-其他电脑用提示框里的 `http://192.168.x.x:8080` 打开。
+其他电脑用弹窗里显示的 `http://192.168.x.x:8080` 打开。
 
 > 其他电脑打不开 → 检查 Windows 防火墙是否放行 8080 端口。
 
@@ -76,15 +95,13 @@ cd web && npm run dev     # http://localhost:5173，/api 与 /d 已代理到 808
 服务只用 Docker Engine 的 HTTP API，**本机不需要装 docker 命令行**，所以「服务在 A 机、Docker 在 B 机」
 完全支持：停止 / 启动 / 重建 都是直接打到 B 机的 API，功能与 Docker 在本机时一致。
 
-**在页面上切换（推荐）**
+**在页面上绑定（推荐）**
 
-顶栏状态胶囊里的地址就是当前 Docker 位置，点它打开「Docker 地址」弹窗：
+主区第一屏的「绑定打包镜像环境」卡里选「远程 Docker」，填地址 → 「测试连接」→「绑定并启动」：
 
-- 当前地址上方有「本机 / 远程」标签
-- 输入框填远程地址 → 点「测试连接」只试连（会显示 Docker 版本和可用内存）→ 点「切换」正式生效
+- 填远程地址后点「测试连接」只试连（会显示 Docker 版本和可用内存）→ 点「绑定并启动」正式生效
 - 地址写法随意：`192.168.1.23`（自动补 2375）、`192.168.1.23:2375`、`http://192.168.1.23:2375` 都认
-- **留空点「切换」= 回到本机 Docker**
-- 切换会先试连，**连不通就拒绝**，不会把服务打到不可用的地址上
+- 绑定会先试连，**连不通就拒绝**，不会把服务打到不可用的地址上
 - 有任务正在构建（`running`/`queued`）时不允许切换，避免构建中途换机器
 - 切换后自动记住，写在 `data/docker.json`，**重启服务仍然生效**
 
@@ -108,14 +125,18 @@ set "DOCKER_HOST=tcp://192.168.1.23:2375"
 
 ## 界面流程
 
-页面只有两块：**新建打包** + **打包记录**。
+顶栏只放品牌和退出，**所有环境操作都在主区**。流程是「先绑环境，再打包」：
 
-0. **环境开关** —— 顶栏标题右边的状态胶囊：`● 打包环境运行中 / ● 打包环境已停止`。
-   默认停止（容器不跑就不占内存），点胶囊里的「启动」约 2 秒；停止状态下不显示打包区。
-   首次打开会先显示「检测 Docker 服务…」，检测完才判定是运行中还是未连接。
-   **胶囊里还会显示当前 Docker 地址**（本机显示「本机」，远程显示 `IP:端口`），
-   点它就能切换地址——见下面「远程 Docker」。**停止 / 重建 等操作始终作用在当前地址上**。
-1. **上传资源包** —— 没上传时是一块拖拽区，支持两种方式：
+0. **绑定打包镜像环境（主区第一屏）** —— 首次打开只有这一张引导卡，选一套镜像环境：
+   - **本机 Docker**：用这台机器的 Docker。Windows 上会标「不可用」——本机 Docker 走命名管道
+     （npipe），本服务只实现了 unix socket / TCP，请改用远程
+   - **远程 Docker**：填一台装了打包镜像的机器地址（`192.168.1.23` 会自动补 2375），
+     可先「测试连接」看 Docker 版本和可用内存
+   - 点「绑定并启动」后，服务端会**先试连 → 确认镜像存在 → 启动容器**，任一步失败都不算绑定成功
+   - **只有绑定成功且环境在运行，下面的上传和打包表单才会出现**；否则一直显示锁定提示
+   - 绑定关系记在 sessionStorage，刷新页面不用重选；但端点被人换掉、环境被停止、或换浏览器时失效
+   - 已绑定后这张卡收成一条状态条（运行中 / 本机或远程 / 地址 / 内存 · 镜像），右侧「换环境」可重选
+1. **上传资源包** —— 环境就绪后才出现。没上传时是一块拖拽区，支持两种方式：
    **选择 zip 文件**（HBuilderX 生成的 __UNI__XXXX.zip）或
    **选择文件夹**（HBuilderX 导出的本地打包资源目录，浏览器按相对路径整目录上传，
    需 Chrome / Edge 等内核；文件夹会在服务端原样还原，打包时自动压成 zip 送进容器）。
@@ -125,11 +146,30 @@ set "DOCKER_HOST=tcp://192.168.1.23:2375"
    包名和版本号实时校验。
 3. **开始打包** —— 按钮旁边是「打开日志」。进度条**只在提交后真正有进度时**才出现在按钮下方，
    同时显示阶段文字；完成后原地显示产物名、体积和**产物所在的本机目录**，
-   右侧「打开文件夹」直接在本机文件管理器里定位到 `data/outputs/<jobId>/`（本地构建，不用再下载一遍）。
+   右侧「打开文件夹」直接在本机文件管理器里定位到 `output/<jobId>/`（本地构建，不用再下载一遍）。
    日志在弹窗里实时滚动，带「复制 / 下载 / 自动滚动」，不占页面空间。
 4. **打包记录** —— 状态用**整行底色**表示（绿=完成 / 红=失败 / 蓝=构建中 / 橙=排队），
    支持搜索、状态筛选、每页 5 条分页、展开看详情。
    需要复用以前的填写内容时，用上传区右侧的「回填信息」按钮，从弹窗里挑一条。
+
+> 页面的展开/收起、卡片切换、完成态都用 `@vueuse/motion`（`v-motion`）做了过渡，
+> 不再是生硬的瞬间切换。要调节动画时长改各组件里的 motion 对象即可。
+
+## 页面内也能拿到部署文件
+
+页面底部有个**「自己部署一套打包环境」**的折叠面板，展开后是三个可直接复制/下载的文件：
+
+| 文件 | 内容 |
+|---|---|
+| `docker-compose.yml` | 三个服务：`build` 一次性打包 / `doctor` 环境自检 / `runtime` 常驻容器 |
+| `.env.example` | 打包参数模板（APP_ID / 包名 / 版本 / 权限 / 渠道 / 签名…），复制成 `.env` 再填 |
+| `README.md` | 完整部署说明：参数表、常用命令、注意事项、排错 |
+
+也支持「下载全部」，三个文件一次拿到，放进同一个目录照 README 三步即可：
+放资源到 `src/` → 填 `.env` → `docker compose run --rm build`，APK 出在 `output/`。
+
+> 这三个文件的原文存在 `web/src/deploy/`，用 Vite 的 `?raw` 内联进 bundle，
+> 所以**改这几个文件不需要动组件**，重新 `npm run build` 就会同步到页面。
 
 ## 效率细节
 
@@ -144,7 +184,7 @@ set "DOCKER_HOST=tcp://192.168.1.23:2375"
 | 记录越来越多 | 只保留最近 20 条（`KEEP_JOBS` 可调），更早的自动移入回收站，不占列表 |
 | 记录太多 | 搜索框（应用/包名/版本/文件名）+ 状态筛选 + 每页 15 条「显示更多」 |
 | 一眼分清记录状态 | 不占一列标签：**整行底色**表示状态（绿=完成 / 红=失败 / 蓝=构建中 / 橙=排队），行首还有 3px 色条 |
-| 打完包取产物 | 服务在本机跑，完成后点「打开文件夹」直接到 `data/outputs/<jobId>/`，渠道包和 build-info.json 都在里面 |
+| 打完包取产物 | 服务在本机跑，完成后点「打开文件夹」直接到 `output/<jobId>/`，渠道包和 build-info.json 都在里面 |
 | 下载前想确认打的什么包 | 完成区显示体积和产物目录；记录右侧显示 `minSdk / targetSdk / 体积`；用测试证书签名会打橙色「测试签名」标记 |
 
 ## appkey 必须填，否则真机起不来
@@ -175,7 +215,7 @@ HBuilderX 云打包的「渠道包」在这边同样支持：**一个版本，�
 实现方式：只组装一次工程，然后**按渠道逐个跑 `assembleRelease`**（改 Manifest → 打包 → 收集），
 Gradle 增量让第 2 个渠道起每个约 30~40 秒（双渠道整包约 90 秒）。
 
-多渠道构建的产物同样落在同一个 `data/outputs/<jobId>/` 目录里，点「打开文件夹」就能
+多渠道构建的产物同样落在同一个 `output/<jobId>/` 目录里，点「打开文件夹」就能
 一次看到所有渠道的 APK 和 `build-info.json`，不用逐条下载：
 
 - 完成区会提示「N 个渠道包」，体积是该记录第一个包的大小
@@ -278,11 +318,11 @@ Gradle 增量让第 2 个渠道起每个约 30~40 秒（双渠道整包约 90 �
 
    ```bat
    set DOCKER_HOST=tcp://192.168.1.23:2375
-   uniapp-pack-server.exe
+   uniapp-pack.exe
    ```
 
-   启动横幅会打印 `Docker : tcp://192.168.1.23:2375（远程）`，
-   页面顶栏胶囊里显示的就是当前地址，点它可切换。
+   启动横幅会打印 `Docker : tcp://192.168.1.23:2375（远程）`；
+   页面上也可以在「绑定打包镜像环境」卡里选远程并填地址，效果相同且可随时更换。
 
 3. 前端热更新：`cd web && npm run dev` → http://localhost:5173
    （vite 已配 `/api`、`/d` 代理到 `127.0.0.1:8080`）
@@ -351,35 +391,58 @@ manifest.json 是被裁剪过的**，不含 `app-plus.distribute.android`：
 ## 目录结构
 
 ```
-web/                     前端工程（Vue3 + TDesign）
-  src/App.vue              骨架：顶栏 / 环境状态 / 主卡片
-  src/store.js             全局状态与所有 API 动作（含 SSE、JSONC 解析）
-  src/api.js               接口封装
-  src/components/          UploadPanel / ConfigPanel / ProgressPanel / LogDialog / LoginView / DockerHostDialog
-  dist/                    npm run build 产物（被 go:embed 打进 exe）
-android.go               安卓原生配置：基线权限表、可选权限目录、模块→权限建议
-dockerapi.go             Docker Engine HTTP API 客户端（不依赖 docker CLI）
-dockerhost.go            Docker 地址：规范化、持久化（data/docker.json）、试连
-openfolder.go            在本机文件管理器打开产物目录
-manifest_test.go         manifest.json 解析与权限白名单的回归测试（go test）
-_legacy/removed-2026-11-16/  已下线的 RecordsPanel（打包记录）与 RefillDialog（回填）留档
-_legacy/                 旧版无框架前端，仅留档
-data/
-  uploads/<uploadId>/   上传的原始包
-  outputs/<jobId>/      APK + build-info.json
-  keystores/            证书文件 + index.json
-  icons/                页面上传的图标
-  config/               容器内 /workspace/config 的持久化镜像（含自动生成的 auto.jks）
-  trash/<jobId>/        回收站（保留 7 天）
-  appkeys.json          按 appid 记住的离线打包 appkey
-  jobs.json             任务记录（重启后历史仍在，产物目录都还在）
+main_windows.go           Windows 入口：单实例（互斥体）→ 起服务 → 托盘 → 弹窗 → 消息循环
+main_other.go             其它平台入口：前台跑服务（没有托盘）
+tray_windows.go           托盘图标、右键菜单、启动弹窗（Win32 调用，无第三方库）
+tray.ico                  托盘图标（编译时嵌入）
+main.go                   配置与路由：newServer() 组装 HTTP 服务
+store.go                  数据层（任务、证书、回收站、清理策略）
+api.go                    所有 HTTP 接口
+build.go                  打包流程编排（docker cp / exec / 产物收集）
+android.go                安卓原生配置：基线权限表、可选权限目录、模块→权限建议
+dockerapi.go              Docker Engine HTTP API 客户端（不依赖 docker CLI）
+dockerhost.go             Docker 地址：规范化、持久化（data/docker.json）、试连
+openfolder.go             在本机文件管理器打开产物目录
+build.bat                 一键构建单文件 exe（GBK 编码，勿转 UTF-8）
+start.bat                 前台启动（调试看日志用，GBK 编码）
+release.ps1               发版：构建 + tag + 上传 GitHub Release（纯 ASCII）
+dist-notes.md             Release 说明正文
+web/                      前端工程（Vue3 + TDesign）
+  src/App.vue             骨架：顶栏 / 环境绑定 / 主卡片
+  src/store.js            全局状态与所有 API 动作（含 SSE、JSONC 解析）
+  src/api.js              接口封装
+  src/components/         UploadPanel / ConfigPanel / ProgressPanel / EnvironmentStep / DeployGuide / LogDialog / LoginView
+  src/deploy/             页面内可下载的部署文件（docker-compose.yml / .env.example / README）
+  dist/                   npm run build 产物（被 go:embed 打进 exe）
+manifest_test.go          manifest.json 解析与权限白名单的回归测试（go test）
+dockerhost_test.go        Docker 地址规范化 / 持久化 / 绑定逻辑的回归测试
+_legacy/                  已下线的组件与旧版无框架前端，仅留档
+```
+
+运行时（exe 同级，构建时不需要这些，跑起来才创建）：
+
+```
+output/                   APK 产物
+  <jobId>/                APK + build-info.json
+cache/                    可再生缓存（整个删掉不丢配置）
+  uploads/<uploadId>/     上传的原始包
+  config/                 容器 /workspace/config 的持久化镜像（含自动生成的 auto.jks）
+  tmp/<jobId>/            单次构建的临时配置
+  trash/<jobId>/          回收站（保留 7 天）
+data/                     长期状态（删了要重新配）
+  keystores/              证书文件 + index.json
+  icons/                  页面上传的图标
+  splashes/               页面上传的启动图
+  appkeys.json            按 appid 记住的离线打包 appkey
+  jobs.json               任务记录
+  docker.json             页面切换过的 Docker 地址
 ```
 
 ## 上传包的生命周期（省磁盘）
 
 | 时机 | 处理 |
 |---|---|
-| 上传 | 原始 zip 存 `data/uploads/<uploadId>/`，不解压，只读 zip 里的 `manifest.json` 填表 |
+| 上传 | 原始 zip 存 `cache/uploads/<uploadId>/`，不解压，只读 zip 里的 `manifest.json` 填表 |
 | 打包 | `docker cp` 整个 zip 进容器，容器内解压到 `/tmp`，只把解压后的 `www` 打进 APK（zip 本身不进包） |
 | **构建成功** | **立刻删掉原包**，释放 20～30MB |
 | 构建失败 | 保留原包，方便「一键重试」；重试成功后再删 |

@@ -37,7 +37,7 @@ func (s *Store) runBuild(j *Job) {
 	// ---- 1. 准备宿主机侧目录 ----
 	upDir := s.uploadDir(j.UploadID)
 	outDir := s.outputDir(j.ID)
-	cfgTmp := filepath.Join(s.cfg.DataDir, "tmp", j.ID, "config")
+	cfgTmp := filepath.Join(s.tmpDir(), j.ID, "config")
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		j.FinishErr("创建输出目录失败: " + err.Error())
 		return
@@ -188,6 +188,8 @@ func (s *Store) streamBuild(j *Job) bool {
 	}
 	add("ADD_PERMISSIONS", strings.Join(j.AddPerms, ","))
 	add("DEL_PERMISSIONS", strings.Join(j.DelPerms, ","))
+	// 打包 CPU 架构：空则由容器端回落到默认 arm64-v8a,armeabi-v7a（不含 x86）
+	add("ABI_FILTERS", strings.Join(j.AbiFilters, ","))
 
 	dc := getDockerClient()
 	execID, err := dc.execCreate(runtimeName, []string{"/opt/pack/entrypoint.sh", "build"}, env)

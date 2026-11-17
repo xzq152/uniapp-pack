@@ -18,7 +18,12 @@ import (
 var webFS embed.FS
 
 type Config struct {
-	Port        string
+	Port string
+	// OutputDir 构建产物（APK、build-info.json），默认 exe 同级 output/
+	OutputDir string
+	// CacheDir 可再生的临时数据（上传包、容器 config 镜像、回收站），默认 exe 同级 cache/
+	CacheDir string
+	// DataDir 需要长期保留的状态（证书、jobs.json、docker.json、图标、启动图），默认 exe 同级 data/
 	DataDir     string
 	Image       string
 	GradleVol   string
@@ -46,14 +51,18 @@ func envInt(k string, def int) int {
 	return def
 }
 
-func main() {
-	log.SetFlags(log.LstdFlags | log.Lshortfile)
-
-	exeDir, _ := os.Executable()
-	base := filepath.Dir(exeDir)
-
-	cfg := Config{
-		Port:        envOr("PORT", "8080"),
+// defaultConfig 以 exe 所在目录为根布置三个同级目录。
+//
+// 之所以要分开（而不是都塞进 data/）：
+//   - output/ 是用户真正要拿的东西，点「打开文件夹」时一眼能看到 APK
+//   - cache/ 可以整个删掉而不会丢配置，出问题让用户删它最省事
+//   - data/  存证书和任务记录，删了要重新配，不能混在缓存里被误删
+func defaultConfig(base string) Config {
+	return Config{
+		Port: envOr("PORT", "8080"),
+		// 三个目录都允许用环境变量覆盖，方便老用户沿用原来的 DATA_DIR
+		OutputDir:   envOr("OUTPUT_DIR", filepath.Join(base, "output")),
+		CacheDir:    envOr("CACHE_DIR", filepath.Join(base, "cache")),
 		DataDir:     envOr("DATA_DIR", filepath.Join(base, "data")),
 		Image:       envOr("IMAGE", "uniapp-android-builder:latest"),
 		GradleVol:   envOr("GRADLE_VOLUME", "uniapp_gradle_cache"),
@@ -64,10 +73,16 @@ func main() {
 		KeepAPKs:    envInt("KEEP_APK", 5),
 		KeepJobs:    envInt("KEEP_JOBS", 20),
 	}
+}
 
+// newServer 组装好完整的 HTTP 服务（路由、静态资源、清理）。
+//
+// 抽成独立函数是为了能被托盘宿主进程内直接调用——发布版把服务和托盘合成
+// 一个 exe，不再需要拉起子进程，也就不会有「找不到服务程序」这类问题。
+func newServer(cfg Config) (*http.Server, error) {
 	store := NewStore(cfg)
 	if err := store.ensureDirs(); err != nil {
-		log.Fatalf("初始化数据目录失败: %v", err)
+		return nil, fmt.Errorf("初始化数据目录失败: %w", err)
 	}
 	// 页面切换过的 Docker 端点优先于环境变量（换机器不用改 start.bat 重启）
 	if saved, found := store.loadDockerPrefs(); found {
@@ -142,14 +157,13 @@ func main() {
 		WriteTimeout: 0, // 下载大包 / SSE 不限时
 		IdleTimeout:  120 * time.Second,
 	}
-
-	printBanner(cfg)
-	log.Fatal(srv.ListenAndServe())
+	return srv, nil
 }
 
 func mustSub() fs.FS {
 	sub, err := fs.Sub(webFS, "web/dist")
 	if err != nil {
+		// 嵌入资源缺失是打包错误，属于不可恢复；但这里仍 return nil 让调用方崩在明确的位置
 		log.Fatalf("嵌入资源错误: %v", err)
 	}
 	return sub
@@ -199,6 +213,8 @@ func printBanner(cfg Config) {
 		fmt.Println("    未检测到局域网 IP，请检查网络连接")
 	}
 	fmt.Printf("    打包镜像 : %s\n", cfg.Image)
+	fmt.Printf("    APK 产物 : %s\n", cfg.OutputDir)
+	fmt.Printf("    缓存目录 : %s\n", cfg.CacheDir)
 	fmt.Printf("    数据目录 : %s\n", cfg.DataDir)
 	fmt.Printf("    Docker   : %s\n", dockerBanner())
 	fmt.Println("   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")

@@ -61,13 +61,58 @@ function lineClass(line) {
   return ''
 }
 
+// 复制日志。
+//
+// 注意：navigator.clipboard.writeText 只在「安全上下文」可用（https 或 localhost）。
+// 本服务常通过局域网 IP（如 http://192.168.1.16:8080）访问，属于非安全上下文，
+// 该 API 会直接抛错 —— 这就是「复制失败，请用下载」的根因。
+// 所以这里做三级降级，任何环境都能复制：
+//   ① navigator.clipboard（新浏览器 + 安全上下文）
+//   ② 隐藏 textarea + document.execCommand('copy')（兼容 http 局域网）
+//   ③ 都失败才提示用下载
 async function copyLog() {
-  try {
-    await navigator.clipboard.writeText(state.job.logs.join('\n'))
-    MessagePlugin.success('日志已复制')
-  } catch (e) {
-    MessagePlugin.warning('复制失败，请用「下载」')
-  }
+	const text = state.job.logs.join('\n')
+	if (!text) {
+		MessagePlugin.warning('暂无日志可复制')
+		return
+	}
+
+	// ① 标准 Clipboard API
+	try {
+		if (navigator.clipboard && window.isSecureContext) {
+			await navigator.clipboard.writeText(text)
+			MessagePlugin.success('日志已复制')
+			return
+		}
+	} catch (e) {
+		// 继续走降级方案
+	}
+
+	// ② 传统 execCommand：用隐藏 textarea 选中后复制，http 下也能用
+	try {
+		const ta = document.createElement('textarea')
+		ta.value = text
+		// 放在视口内但不可见，避免页面滚动/闪动
+		ta.setAttribute('readonly', '')
+		ta.style.position = 'fixed'
+		ta.style.top = '0'
+		ta.style.left = '-9999px'
+		ta.style.opacity = '0'
+		document.body.appendChild(ta)
+		ta.focus()
+		ta.select()
+		ta.setSelectionRange(0, ta.value.length) // iOS 兼容
+		const ok = document.execCommand('copy')
+		document.body.removeChild(ta)
+		if (ok) {
+			MessagePlugin.success('日志已复制')
+			return
+		}
+	} catch (e) {
+		// 继续走到失败提示
+	}
+
+	MessagePlugin.warning('复制失败，请用「下载」')
 }
 
 function downloadLog() {

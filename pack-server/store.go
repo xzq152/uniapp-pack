@@ -62,6 +62,10 @@ type Job struct {
 	ReqTargetSdk int      `json:"reqTargetSdk,omitempty"`
 	AddPerms     []string `json:"addPerms,omitempty"`
 	DelPerms     []string `json:"delPerms,omitempty"`
+	// AbiFilters 打包的 CPU 架构，空＝默认 arm64-v8a,armeabi-v7a（不含 x86）。
+	// 限制架构能显著减小包体：x86/x86_64 是模拟器架构，真机用不到，
+	// 全量打进去会多出近 34MB 未压缩体积。
+	AbiFilters []string `json:"abiFilters,omitempty"`
 
 	// 内部字段：不序列化给前端
 	storePass string
@@ -113,15 +117,26 @@ func NewStore(cfg Config) *Store {
 
 // ---------------------------------------------------------------------------
 // 目录
+//
+// 三个根目录分开（都可被 OUTPUT_DIR / CACHE_DIR / DATA_DIR 覆盖）：
+//   output/  产物 APK —— 用户真正要拿的东西
+//   cache/   可再生数据：上传包、容器 config 镜像、tmp、回收站 —— 删掉不影响配置
+//   data/    长期状态：证书、jobs.json、docker.json、图标、启动图 —— 删了要重配
 // ---------------------------------------------------------------------------
 
-func (s *Store) uploadsDir() string  { return filepath.Join(s.cfg.DataDir, "uploads") }
-func (s *Store) outputsDir() string  { return filepath.Join(s.cfg.DataDir, "outputs") }
+// 产物
+func (s *Store) outputsDir() string { return s.cfg.OutputDir }
+
+// 缓存（可再生）
+func (s *Store) uploadsDir() string  { return filepath.Join(s.cfg.CacheDir, "uploads") }
+func (s *Store) configDir() string   { return filepath.Join(s.cfg.CacheDir, "config") }
+func (s *Store) trashDir() string    { return filepath.Join(s.cfg.CacheDir, "trash") }
+func (s *Store) tmpDir() string      { return filepath.Join(s.cfg.CacheDir, "tmp") }
+
+// 长期状态
 func (s *Store) keystoreDir() string { return filepath.Join(s.cfg.DataDir, "keystores") }
-func (s *Store) configDir() string   { return filepath.Join(s.cfg.DataDir, "config") }
 func (s *Store) iconsDir() string    { return filepath.Join(s.cfg.DataDir, "icons") }
 func (s *Store) splashesDir() string { return filepath.Join(s.cfg.DataDir, "splashes") }
-func (s *Store) trashDir() string    { return filepath.Join(s.cfg.DataDir, "trash") }
 
 func (s *Store) uploadDir(id string) string { return filepath.Join(s.uploadsDir(), id) }
 
@@ -242,7 +257,12 @@ func (s *Store) PruneUploads() (removed int, freed int64) {
 func (s *Store) outputDir(id string) string { return filepath.Join(s.outputsDir(), id) }
 
 func (s *Store) ensureDirs() error {
-	for _, d := range []string{s.uploadsDir(), s.outputsDir(), s.keystoreDir(), s.configDir(), s.iconsDir(), s.splashesDir(), s.trashDir()} {
+	dirs := []string{
+		s.outputsDir(),
+		s.uploadsDir(), s.configDir(), s.trashDir(), s.tmpDir(),
+		s.keystoreDir(), s.iconsDir(), s.splashesDir(),
+	}
+	for _, d := range dirs {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return err
 		}
@@ -479,6 +499,7 @@ type JobView struct {
 	ReqTargetSdk int      `json:"reqTargetSdk,omitempty"`
 	AddPerms     []string `json:"addPerms,omitempty"`
 	DelPerms     []string `json:"delPerms,omitempty"`
+	AbiFilters   []string `json:"abiFilters,omitempty"`
 }
 
 func (j *Job) Snapshot() JobView {
@@ -522,6 +543,7 @@ func (j *Job) Snapshot() JobView {
 		ReqTargetSdk: j.ReqTargetSdk,
 		AddPerms:     append([]string(nil), j.AddPerms...),
 		DelPerms:     append([]string(nil), j.DelPerms...),
+		AbiFilters:   append([]string(nil), j.AbiFilters...),
 	}
 }
 

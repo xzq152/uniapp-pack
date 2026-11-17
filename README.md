@@ -26,24 +26,58 @@
 
 ---
 
-## 快速开始（换一台机器）
+## 直接用（推荐）
+
+从 [Releases](https://github.com/xzq152/uniapp-pack/releases) 下载 `uniapp-pack.exe`，双击即用。
+**不需要安装 Go / Node，也不用自己构建**——服务端和托盘都在这一个 exe 里。
+
+首次启动会弹出窗口显示本机与局域网地址，可一键打开页面。服务常驻右下角托盘：
+双击图标打开页面，右键菜单可退出。**同时只会运行一个实例**（用命名互斥体判断，不靠端口）。
+
+产物与数据都在 exe 同级，直接拷走即可备份：
+
+```
+uniapp-pack.exe
+output/     ← APK 产物
+cache/      ← 可再生缓存，删了不影响配置
+data/       ← 证书、任务记录等长期数据
+```
+
+> 前置条件：需要一台装了 Docker 的机器，并且已有打包镜像 `uniapp-android-builder:latest`。
+> Windows 的本机 Docker 走命名管道、本程序只支持 unix socket / TCP，所以请把镜像装在
+> 一台 Linux / 局域网机器上，然后在页面里填它的 `tcp://IP:2375`。
+
+打开 <http://127.0.0.1:8080>。**页面第一屏是「绑定打包镜像环境」**：选本机或远程 Docker → 点「绑定并启动」，
+确认环境运行中后，上传与打包表单才会出现。打完后点完成区的「打开文件夹」，直接在本机文件管理器
+定位到 `output/<jobId>/`。
+
+页面底部还有**「自己部署一套打包环境」**折叠面板，可直接查看/复制/下载
+`docker-compose.yml`、`.env.example`、部署说明三个文件——想脱离本服务、纯命令行打包时用它。
+原文放在 `pack-server/web/src/deploy/`，由 Vite 的 `?raw` 内联进前端。
+
+---
+
+## 从源码构建
 
 ```bash
-# 1) 环境：Go 1.22+、Node 18+、Docker Desktop（WSL2）
-#    详细要求见 docs/01-环境与依赖.md
+# 1) 环境：Go 1.22+、Node 18+、Docker（详细要求见 docs/01-环境与依赖.md）
 
 # 2) 先构建打包镜像（约 3GB，首次较慢）
 cd android-builder && ./build-image.sh
 
-# 3) 再构建服务（前端 + Go + 启动器）
-cd ../pack-server && build.bat        # Windows 双击即可
+# 3) 构建单文件 exe（前端 + Go + 托盘）
+cd ../pack-server && build.bat        # Windows 双击即可，产物 uniapp-pack.exe
 
 # 4) 运行
-双击 启动服务.exe     # 无窗口，右下角托盘常驻；双击托盘图标打开页面
+双击 uniapp-pack.exe
 ```
 
-打开 <http://127.0.0.1:8080>，点右上「启动环境」后即可上传打包。
-打完后点完成区的「打开文件夹」，直接在本机文件管理器定位到 `data/outputs/<jobId>/`。
+发版（构建 + 打 tag + 传 GitHub Release）：
+
+```powershell
+cd pack-server
+.\release.ps1 -Tag v1.0.0 -Publish    # 需要环境变量 GH_TOKEN
+```
 
 ---
 
@@ -52,16 +86,16 @@ cd ../pack-server && build.bat        # Windows 双击即可
 服务只走 Docker Engine 的 HTTP API，**本机不需要装 docker 命令行**，所以「服务在 A 机、Docker 在 B 机」
 完全支持：停止 / 启动 / 重建 都是直接打到 B 机的 API，行为和 Docker 在本机时一致。
 
-**在页面上切换（推荐）**
+**在页面上绑定（推荐）**
 
-顶栏状态胶囊里显示的就是当前 Docker 地址（本机显示「本机」，远程显示 `IP:端口`），点它打开切换面板：
+主区第一屏的「绑定打包镜像环境」卡里选「远程 Docker」，填地址后点「测试连接」
+（显示 Docker 版本与可用内存）→「绑定并启动」。绑定成功后环境卡收成状态条，右侧「换环境」可重选：
 
-- 填地址 → 「测试连接」只试连（显示 Docker 版本与可用内存）→「切换」正式生效
 - 写法宽松：`192.168.1.23`（自动补 2375）、`192.168.1.23:2375`、`http://192.168.1.23:2375` 都认
-- 留空点「切换」= 回到本机 Docker
-- 切换**先试连，连不通就拒绝**，不会把服务打到不可用的地址上
+- 绑定会**先试连，连不通就拒绝**，不会把服务打到不可用的地址上
 - 有任务在构建（`running`/`queued`）时不允许切换，避免构建中途换机器
-- 切换后写入 `data/docker.json`，**重启服务仍然生效**
+- 绑定写入 `data/docker.json`，**重启服务仍然生效**
+- 「换环境」回到引导卡重新选择；顶栏不再有环境控件
 
 **用环境变量（启动时固定）**
 
@@ -104,8 +138,12 @@ set "DOCKER_HOST=tcp://192.168.1.23:2375"
 uniapp-pack/
 ├── README.md                 ← 本文件
 ├── docs/                     ← 开发文档（环境、架构、构建、要点、接口、踩坑）
-├── pack-server/              ← Go 服务 + 前端 + 启动器
-│   ├── main.go               入口：配置、路由、静态资源、启动清理
+├── pack-server/              ← Go 服务 + 前端（产物是单个 exe）
+│   ├── main_windows.go       Windows 入口：单实例 → 起服务 → 托盘 → 弹窗 → 消息循环
+│   ├── main_other.go         其它平台入口：前台跑服务（无托盘）
+│   ├── tray_windows.go       托盘图标 / 右键菜单 / 启动弹窗（原生 Win32，无第三方库）
+│   ├── tray.ico              托盘图标（编译时嵌入）
+│   ├── main.go               配置与路由：newServer() 组装 HTTP 服务
 │   ├── api.go                所有 HTTP 接口
 │   ├── build.go              打包流程编排（docker cp / exec / 产物收集）
 │   ├── store.go              数据层（任务、证书、回收站、清理策略）
@@ -115,11 +153,11 @@ uniapp-pack/
 │   ├── openfolder.go         在本机文件管理器打开产物目录
 │   ├── auth.go               访问口令（可选）
 │   ├── go.mod                module uniapp-pack-server（零第三方依赖）
-│   ├── cmd/launcher/         托盘宿主（启动服务 + 托盘图标 + 右键菜单）
-│   ├── cmd/stopper/          停止器
 │   ├── web/                  Vue3 + TDesign 前端源码
-│   ├── build.bat             一键构建（npm build → go build → 启动器）
-│   └── start.bat             只跑服务（前台，调试看日志用）
+│   ├── build.bat             一键构建单文件 exe
+│   ├── start.bat             前台启动（调试看日志用）
+│   ├── release.ps1           发版：构建 + tag + 上传 GitHub Release
+│   └── dist-notes.md         Release 说明正文
 └── android-builder/          ← 打包镜像
     ├── Dockerfile
     ├── build-image.sh        构建 uniapp-android-builder:latest

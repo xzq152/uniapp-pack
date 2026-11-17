@@ -1,0 +1,56 @@
+name: uniapp-pack
+
+x-common: &common
+  image: uniapp-android-builder:latest
+  working_dir: /workspace
+  environment:
+    TZ: Asia/Shanghai
+    APP_ID: ${APP_ID:-}
+    APP_NAME: ${APP_NAME:-}
+    APP_PACKAGE: ${APP_PACKAGE:-}
+    APP_VERSION_NAME: ${APP_VERSION_NAME:-}
+    APP_VERSION_CODE: ${APP_VERSION_CODE:-}
+    APP_KEY: ${APP_KEY:-}
+    MIN_SDK: ${MIN_SDK:-}
+    TARGET_SDK: ${TARGET_SDK:-}
+    ADD_PERMISSIONS: ${ADD_PERMISSIONS:-}
+    DEL_PERMISSIONS: ${DEL_PERMISSIONS:-}
+    CHANNELS: ${CHANNELS:-}
+    KEYSTORE_FILE: ${KEYSTORE_FILE:-}
+    STORE_PASSWORD: ${STORE_PASSWORD:-}
+    KEY_ALIAS: ${KEY_ALIAS:-}
+    KEY_PASSWORD: ${KEY_PASSWORD:-}
+    SPLASH_BG: ${SPLASH_BG:-}
+    SPLASH_HEIGHT: ${SPLASH_HEIGHT:-}
+    USE_CN_MIRROR: ${USE_CN_MIRROR:-1}
+  volumes:
+    - ./src:/workspace/src
+    - ./output:/workspace/output
+    - ./config:/workspace/config
+    - gradle:/root/.gradle
+    - pnpm:/root/.local/share/pnpm/store
+
+services:
+  # 一次性打包
+  build:
+    <<: *common
+
+  # 环境自检
+  doctor:
+    <<: *common
+    entrypoint: ["/opt/pack/entrypoint.sh"]
+    command: doctor
+
+  # 常驻空转容器，供 pack-server 通过 docker exec 复用
+  runtime:
+    <<: *common
+    container_name: uniapp-pack-runtime
+    entrypoint: ["/bin/sleep"]
+    command: ["infinity"]
+    restart: "no"
+
+volumes:
+  gradle:
+    name: uniapp_gradle_cache
+  pnpm:
+    name: uniapp_pnpm_store

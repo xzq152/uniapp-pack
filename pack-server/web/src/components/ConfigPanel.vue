@@ -61,6 +61,17 @@
 
       <t-form-item
         class="span2"
+        label="打包架构"
+        tips="只打真机需要的架构能显著减小包体。x86/x86_64 是模拟器架构，真机用不到，全打上会多出近 34MB"
+      >
+        <div class="inline">
+          <t-checkbox-group v-model="state.android.abiFilters" :options="abiOptions" />
+          <t-button size="small" variant="text" @click="resetAbi">恢复默认</t-button>
+        </div>
+      </t-form-item>
+
+      <t-form-item
+        class="span2"
         label="安卓权限"
         tips="不勾选＝从 AndroidManifest 里移除，勾选额外项＝追加声明。移除关键权限（网络、存储）可能导致应用无法使用"
       >
@@ -304,6 +315,21 @@ function onManifest(e) {
 function resetSdk() {
   state.android.minSdk = state.android.defMinSdk
   state.android.targetSdk = state.android.defTargetSdk
+}
+
+// ---- 打包架构 ----
+// x86/x86_64 也能选，但默认不勾：它们是模拟器架构，真机用不到，
+// 全量打进去会让包体多出近 34MB 未压缩体积。
+const DEFAULT_ABI = ['arm64-v8a', 'armeabi-v7a']
+const abiOptions = [
+  { label: 'arm64-v8a（主流真机）', value: 'arm64-v8a' },
+  { label: 'armeabi-v7a（老机型）', value: 'armeabi-v7a' },
+  { label: 'armeabi（极老机型）', value: 'armeabi' },
+  { label: 'x86（模拟器）', value: 'x86' },
+  { label: 'x86_64（模拟器）', value: 'x86_64' },
+]
+function resetAbi() {
+  state.android.abiFilters = [...DEFAULT_ABI]
 }
 
 const sdkErr = computed(() => {

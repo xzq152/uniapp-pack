@@ -1,6 +1,6 @@
 @echo off
 REM ===================================================================
-REM   一键构建：前端（Vue3 + TDesign）→ 嵌入 Go 二进制 → 启动器
+REM   一键构建：前端（Vue3 + TDesign）→ 嵌入 Go 二进制（单文件 exe）
 REM   注意：本文件编码为 GBK（cmd 按本地码页解析，勿存成 UTF-8）
 REM ===================================================================
 setlocal
@@ -19,10 +19,10 @@ set "PATH=%PATH%;C:\Program Files\Go\bin"
 where go >nul 2>nul
 if errorlevel 1 ( echo [x] 找不到 go，请安装 Go 1.22+ & pause & exit /b 1 )
 
-tasklist 2>nul | findstr /I "uniapp-pack-server.exe 启动服务.exe" >nul
+tasklist 2>nul | findstr /I "uniapp-pack.exe" >nul
 if not errorlevel 1 (
-  echo [!] 服务或托盘程序正在运行，会锁住 exe
-  echo     请先双击 停止服务.exe，然后按任意键继续构建
+  echo [!] uniapp-pack.exe 正在运行，会锁住 exe
+  echo     请先在托盘右键选「退出」，然后按任意键继续构建
   pause
 )
 
@@ -33,19 +33,16 @@ call npm run build
 if errorlevel 1 ( popd & echo [x] 前端构建失败 & pause & exit /b 1 )
 popd
 
-echo [*] 编译服务（前端已嵌入）...
-go build -o uniapp-pack-server.exe .
+echo [*] 编译单文件 exe（服务 + 托盘，无控制台窗口）...
+go build -ldflags "-H=windowsgui -s -w" -o uniapp-pack.exe .
 if errorlevel 1 ( echo [x] 编译失败 & pause & exit /b 1 )
 
-echo [*] 编译启动器 / 停止器（无控制台窗口）...
-go build -ldflags "-H=windowsgui -s -w" -o 启动服务.exe ./cmd/launcher
-if errorlevel 1 ( echo [x] 启动服务.exe 编译失败 & pause & exit /b 1 )
-go build -ldflags "-H=windowsgui -s -w" -o 停止服务.exe ./cmd/stopper
-if errorlevel 1 ( echo [x] 停止服务.exe 编译失败 & pause & exit /b 1 )
-
 echo.
-echo [ok] 完成：
-echo      uniapp-pack-server.exe   服务本体
-echo      启动服务.exe             双击静默启动（不显示命令行窗口）
-echo      停止服务.exe             双击静默停止
+echo [ok] 完成：uniapp-pack.exe
+echo      双击即用：服务自动启动，托盘常驻，启动时弹窗显示地址
+echo.
+echo      产物 / 缓存 / 数据 都在 exe 同级：
+echo        output\   APK 产物
+echo        cache\    可再生缓存（上传包、临时文件）
+echo        data\     证书、任务记录
 pause

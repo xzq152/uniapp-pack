@@ -3,20 +3,26 @@
 # ---------------------------------------------------------------------------
 
 # 服务运行期数据：上传包、产物 APK、证书、图标、启动图、回收站、jobs.json
-# 注意：DATA_DIR 可能指到仓库根目录下的 data/（start.bat 就是这么配的），
+# 注意：这些目录都在 exe 同级（即 pack-server/ 下），也可能指到仓库根目录，
 # 所以两个位置都要忽略——里面含私钥 .jks、明文口令、DCloud appkey 和几十 MB 的 APK。
 # 只锚定根目录，避免误伤 android-builder 里源码自带的 data/ 目录。
 /data/
 pack-server/data/
+/output/
+pack-server/output/
+/cache/
+pack-server/cache/
 
 # 编译出来的二进制
 *.exe
 # 编辑器/构建工具的备份残片（pack-server.exe~ 之类）
 *.*~
 *.exe~
-pack-server/uniapp-pack-server
-pack-server/启动服务
-pack-server/停止服务
+# 发版脚本的产物目录
+pack-server/dist/
+# 调试留痕
+pack-server/debug.log
+pack-server/tray-error.txt
 
 # 打包镜像的本地产物
 android-builder/output/
@@ -44,6 +50,7 @@ android-builder/tray-error.txt
 
 # 临时截图（调 UI 时随手截的，无引用）
 pack-server/ui-*.png
+pack-server/.*.png
 
 # ---------------------------------------------------------------------------
 # 依赖与编辑器

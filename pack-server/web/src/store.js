@@ -12,6 +12,10 @@ export const state = reactive({
   // Docker 端点：当前生效地址 / 是否本机 / 页面里正在编辑的草稿
   docker: { host: '', raw: '', envHost: '', local: true, loaded: false },
 
+  // 打包镜像环境：必须先手动绑定（选本地或远程）并确认运行中，才开放打包工作流。
+  // mode: '' 未绑定 | 'local' | 'remote'
+  envBind: { mode: '', bound: false, binding: false },
+
   step: 0,
   upload: { id: '', name: '', size: 0, progress: 0, speed: 0, busy: false, iconHint: '', consumed: false },
   icon: { id: '', name: '' },
@@ -37,6 +41,9 @@ export const state = reactive({
     compileSdk: 35,
     defMinSdk: 21,
     defTargetSdk: 33,
+    // 打包 CPU 架构。默认只打真机常用的两个，不含 x86/x86_64 ——
+    // 那两个是模拟器架构，真机用不到，全打上会让包体多出近 34MB 未压缩体积。
+    abiFilters: ['arm64-v8a', 'armeabi-v7a'],
     sdkVersion: '',
     baseline: [],   // [{name,label}] SDK 模板自带、可取消勾选的权限
     catalog: [],    // [{name,label,note,minSdk}] 可额外添加的权限
@@ -52,7 +59,6 @@ export const state = reactive({
 
   detecting: true,
   logOpen: false,
-  dockerDialogOpen: false,
   jobs: [],   // 仅用于取当前任务的产物信息（APK 名/渠道列表），不再渲染记录列表
   job: { id: '', status: '', progress: 0, stage: '', error: '', logs: [] },
   watching: false,
@@ -62,7 +68,12 @@ let es = null
 let timersStarted = false
 
 // ---------------------------------------------------------------- 环境
-export const runtimeOn = computed(() => !!(state.runtime.dockerOk && state.runtime.running))
+
+// 打包工作流是否已解锁：必须「手动绑定过镜像环境」且「该镜像正在运行」。
+// 只有 running 还不够——用户可能只是上次留下的容器还开着，没主动选过用哪套镜像。
+export const workflowReady = computed(
+  () => state.envBind.bound && state.runtime.dockerOk && state.runtime.running,
+)
 
 export async function loadEnv() {
   try {
@@ -84,6 +95,8 @@ export async function loadRuntime() {
     if (d.dockerHost) {
       state.docker.host = d.dockerHost
       state.docker.local = /^local/i.test(d.dockerHost)
+      // 端点被换掉后，之前的绑定不再成立
+      syncBindWithEndpoint()
     }
   } catch (e) {
     if (e.status === 401) state.needLogin = true
@@ -111,14 +124,16 @@ export async function testDockerHost(host) {
   }
 }
 
-// setDockerHost 切换端点；成功后重新拉一次运行时状态
-export async function setDockerHost(host) {
+// setDockerHost 切换端点；成功后重新拉一次运行时状态。
+// quiet=true 时不弹「已切换」提示——绑定流程里由 doBind 统一报「已绑定」，
+// 否则用户会先看到一条「已切换」再看到「绑定失败」，信息互相打架。
+export async function setDockerHost(host, quiet = false) {
   try {
     const d = await api.dockerSetHost(host)
     state.docker = { ...state.docker, host: d.host, raw: d.raw, local: !d.raw, loaded: true }
     if (d.runtime) state.runtime = d.runtime
     await Promise.all([loadRuntime(), loadJobs()])
-    MessagePlugin.success('已切换到 ' + d.host)
+    if (!quiet) MessagePlugin.success('已切换到 ' + d.host)
     return true
   } catch (e) {
     MessagePlugin.error(e.message)
@@ -130,10 +145,111 @@ export async function runtimeAction(action) {
   try {
     const d = await api.runtimeAction(action)
     state.runtime = d
+    // 环境被停掉后绑定关系失效，需要用户重新确认（也清掉记忆，免得刷新后误以为还绑着）
+    if (action === 'stop' && !d.running) {
+      state.envBind.bound = false
+      rememberBind('')
+    }
     MessagePlugin.success({ start: '打包环境已启动', stop: '打包环境已停止', restart: '环境已重建' }[action] || '完成')
   } catch (e) {
     MessagePlugin.error(String(e.message))
   }
+}
+
+// ---------------------------------------------------------------- 镜像环境绑定
+//
+// 打包前必须先「手动绑定」一套镜像环境：选本机还是远程，然后确认镜像存在、容器跑起来。
+// 只有绑定成功且环境在运行，打包工作流才解锁（见 workflowReady）。
+
+// 绑定关系存 sessionStorage：刷新页面不用重选环境，
+// 但关掉标签页/换浏览器就要重新确认——避免「以为连的是 A 机，其实是上次的 B 机」。
+const BIND_KEY = 'ups.envBind'
+
+function rememberBind(mode) {
+  try {
+    if (mode) sessionStorage.setItem(BIND_KEY, mode)
+    else sessionStorage.removeItem(BIND_KEY)
+  } catch (e) { /* 隐私模式禁用存储时忽略 */ }
+}
+
+// restoreBind 启动时恢复绑定意图；最终是否解锁仍由 workflowReady 按实际运行状态判定
+function restoreBind() {
+  try {
+    const m = sessionStorage.getItem(BIND_KEY)
+    if (m === 'local' || m === 'remote') {
+      state.envBind.mode = m
+      state.envBind.bound = true
+    }
+  } catch (e) { /* 忽略 */ }
+}
+
+// syncBindWithEndpoint 端点与绑定记忆不一致时解除绑定，避免误判已就绪：
+// 记忆里选的是「远程」但实际连的是本机（或反之），说明环境已被换过。
+function syncBindWithEndpoint() {
+  if (!state.envBind.bound) return
+  const nowRemote = !state.docker.local
+  const wantRemote = state.envBind.mode === 'remote'
+  if (nowRemote !== wantRemote) {
+    state.envBind.bound = false
+    rememberBind('')
+  }
+}
+
+// bindLocalEnv 绑定本机 Docker 上的打包镜像
+export async function bindLocalEnv() {
+  return doBind('local', '')
+}
+
+// bindRemoteEnv 绑定远程 Docker 上的打包镜像：切地址 → 确认镜像可用 → 启动
+export async function bindRemoteEnv(host) {
+  return doBind('remote', host)
+}
+
+// doBind 统一的绑定流程：切换端点 → 校验镜像存在 → 启动容器 → 标记已绑定。
+// 任何一步失败都不算绑定成功，工作流保持锁定。
+async function doBind(mode, host) {
+  state.envBind.binding = true
+  try {
+    // 1) 选定 Docker 端点（远程要先试连再切换）；提示统一由本函数最后报
+    const switched = await setDockerHost(mode === 'remote' ? host : '', true)
+    if (!switched) return false
+
+    // 2) 端点确认后，重新读一次运行时状态，校验镜像与容器
+    await loadRuntime()
+    if (!state.runtime.dockerOk) {
+      MessagePlugin.error(state.runtime.message || '连接 Docker 失败')
+      return false
+    }
+    if (!state.runtime.imageOk) {
+      MessagePlugin.error(`该环境上没有打包镜像「${state.runtime.image || state.env.image}」`)
+      return false
+    }
+
+    // 3) 确保容器在跑（已运行则 start 是幂等的）
+    if (!state.runtime.running) {
+      await runtimeAction('start')
+      await loadRuntime()
+    }
+    if (!state.runtime.running) {
+      MessagePlugin.error('打包环境启动失败，请查看日志')
+      return false
+    }
+
+    state.envBind.mode = mode
+    state.envBind.bound = true
+    rememberBind(mode)
+    MessagePlugin.success(mode === 'local' ? '已绑定本机打包镜像' : '已绑定远程打包镜像')
+    return true
+  } finally {
+    state.envBind.binding = false
+  }
+}
+
+// unbindEnv 换一个环境：解除绑定并收起工作流
+export function unbindEnv() {
+  state.envBind.bound = false
+  state.envBind.mode = ''
+  rememberBind('')
 }
 
 export async function login(password) {
@@ -150,8 +266,8 @@ export async function logout() {
 // ---------------------------------------------------------------- 上传
 // 只支持文件夹：HBuilderX「生成本地打包App资源」导出的目录
 export async function uploadFolder(files, rootName) {
-  if (!runtimeOn.value) {
-    MessagePlugin.warning('请先启动打包环境')
+  if (!workflowReady.value) {
+    MessagePlugin.warning(state.envBind.bound ? '打包环境未运行，请先启动' : '请先绑定打包镜像环境')
     return
   }
   if (!files || !files.length) return
@@ -511,8 +627,8 @@ export function pickSplash(file) {
 
 // ---------------------------------------------------------------- 提交
 export async function submit() {
-  if (!runtimeOn.value) {
-    MessagePlugin.warning('请先启动打包环境')
+  if (!workflowReady.value) {
+    MessagePlugin.warning(state.envBind.bound ? '打包环境未运行，请先启动' : '请先绑定打包镜像环境')
     return
   }
 
@@ -569,6 +685,8 @@ export async function submit() {
       targetSdk: Number(state.android.targetSdk) || 0,
       addPerms: state.perm.add.filter((n) => !BASE_NAMES().includes(n)),
       delPerms: BASE_NAMES().filter((n) => !state.perm.keep.includes(n)),
+      // 打包架构：空数组时后端会回落到默认 arm64-v8a + armeabi-v7a
+      abiFilters: [...(state.android.abiFilters || [])],
     }
     const d = await api.build(body)
     watchJob(d.id)
@@ -648,7 +766,10 @@ export async function revealJob(id) {
 
 // ---------------------------------------------------------------- 启动
 export async function boot() {
+  // 先恢复上次的绑定选择，再拉真实状态——最终是否解锁由 workflowReady 判定
+  restoreBind()
   await Promise.all([loadEnv(), loadRuntime(), loadKeystores(), loadJobs(), loadAndroidDefaults(), loadDockerHost()])
+  syncBindWithEndpoint()
   state.booted = true
 
   // 支持 ?job=<id> 直接打开某次构建（方便把链接发给同事看进度）
