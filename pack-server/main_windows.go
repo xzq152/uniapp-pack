@@ -71,6 +71,19 @@ func main() {
 	outputDir = cfg.OutputDir
 	debugLog(fmt.Sprintf("server listening on %s, output=%s", port, outputDir))
 
+	// 服务中途挂掉（端口被抢、监听出错）时要让用户知道，
+	// 否则托盘还显示"运行中"、点开页面却打不开，很难排查。
+	go func() {
+		e := <-errCh
+		if e == nil {
+			return
+		}
+		debugLog("server stopped unexpectedly: " + e.Error())
+		if hWndTray != 0 {
+			pPostMessageW.Call(hWndTray, wmClose, 0, 0)
+		}
+	}()
+
 	// 托盘失败不致命：服务还在跑，只是没有图标
 	if err := initTray(); err != nil {
 		debugLog("initTray failed: " + err.Error())
