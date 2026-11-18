@@ -147,7 +147,17 @@ if ($notes.Length -gt 200000) {
 $rel = $null
 try {
   $rel = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/tags/$Tag" -Headers $headers -Method Get -ErrorAction Stop
-  Write-Host "Release $Tag exists, replacing asset"
+  Write-Host "Release $Tag exists, updating body and replacing asset"
+
+  # Also refresh the release body - otherwise a fixed/edited dist-notes.md
+  # would never make it to an already-created Release.
+  $updatePayload = @{
+    name = 'uniapp-pack ' + $Tag
+    body = $notes
+  } | ConvertTo-Json -Depth 5
+  $updateBytes = [System.Text.Encoding]::UTF8.GetBytes($updatePayload)
+  $rel = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/$($rel.id)" -Headers $headers -Method Patch -Body $updateBytes -ContentType 'application/json; charset=utf-8'
+  Ok "updated Release body"
 } catch {
   $payload = @{
     tag_name   = $Tag
@@ -162,7 +172,12 @@ try {
     Fail "release body got serialized as an object - PowerShell JSON quirk, check the -join fix"
   }
 
-  $rel = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases" -Headers $headers -Method Post -Body $payload -ContentType 'application/json'
+  # CRITICAL: send UTF-8 BYTES, not a .NET string.
+  # PowerShell 5.1 encodes -Body strings as ISO-8859-1 when they contain
+  # non-ASCII characters, so Chinese text reaches GitHub as "????" garbage.
+  # Converting to a UTF-8 byte array keeps the content intact.
+  $payloadBytes = [System.Text.Encoding]::UTF8.GetBytes($payload)
+  $rel = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases" -Headers $headers -Method Post -Body $payloadBytes -ContentType 'application/json; charset=utf-8'
   Ok "created Release: $($rel.html_url)"
 }
 
