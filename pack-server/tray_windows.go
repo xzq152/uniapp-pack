@@ -383,7 +383,7 @@ func trayWndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 		pShellNotifyIconW.Call(nimModify, uintptr(unsafe.Pointer(n)))
 		return 0
 	case wmClose:
-		shutdown()
+		shutdownAsync()
 		return 0
 	case wmDestroy:
 		n := trayData(nifTip, "", "")
@@ -437,7 +437,7 @@ func showTrayMenu(hwnd uintptr) {
 	case 3:
 		showWelcomeWindow()
 	case 4:
-		shutdown()
+		shutdownAsync()
 	}
 }
 
@@ -454,37 +454,40 @@ func openOutputDir() {
 
 // shutdown 停服务并退出托盘。
 //
-// 这是用户点「退出」时唯一应该走的路。三条设计要点，都是为了「一定能退掉」：
+// 这是用户点「退出」时唯一应该走的路。设计要点，都是为了「一定能退掉」：
 //
 //  1. 先删托盘图标。否则窗口销毁后图标可能残留在任务栏（用户就会觉得程序没退）。
-//  2. 停服务放到后台 goroutine 里做，并给硬超时。绝不能在这个线程里同步等——
-//     它跑在消息循环上，一卡住连 DestroyWindow 都执行不到，表现就是"点了没反应"。
-//  3. 最终用 os.Exit 兜底，而不是只靠消息循环自然结束。消息循环能否退出取决于
-//     窗口销毁是否成功、PostQuitMessage 是否送达，任何一环出岔子进程就留着不走。
-//     os.Exit 是确定性的：只要走到这行，进程必定结束。
+//  2. 不依赖消息循环自然结束。它能否退出取决于窗口销毁是否成功、
+//     PostQuitMessage 是否送达，任何一环出岔子进程就留着不走。
+//  3. 退出路径只有一条且是确定性的：停服务（最多等 300ms）→ os.Exit(0)。
+//     不绕窗口、不靠消息，所以不会出现「图标还在但点了没反应」。
 func shutdown() {
 	debugLog("shutdown requested")
 
-	// 1) 先把托盘图标摘掉（销毁窗口前做，图标才不会被遗留）
+	// 1) 先摘掉托盘图标（销毁窗口前做，图标才不会被遗留）
 	if hWndTray != 0 {
 		if n := trayData(nifTip, "", ""); n != nil {
 			pShellNotifyIconW.Call(nimDelete, uintptr(unsafe.Pointer(n)))
 		}
 	}
 
-	// 2) 停 HTTP 服务（后台 + 超时），然后无条件退出进程
-	srv := server
-	go func() {
-		if srv != nil {
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			_ = srv.Shutdown(ctx)
-			cancel()
-			debugLog("http server shut down")
-		}
-		debugLog("exiting process")
-		// 3) 确定性退出：不依赖窗口销毁或消息循环的间接路径
-		os.Exit(0)
-	}()
+	// 2) 尽力优雅关闭 HTTP（最多 300ms，超时就放弃——不能让收尾拖住退出）
+	if srv := server; srv != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+		_ = srv.Shutdown(ctx)
+		cancel()
+		debugLog("http server shut down")
+	}
+
+	// 3) 确定性退出
+	debugLog("exiting process")
+	os.Exit(0)
+}
+
+// shutdownAsync 从消息循环里调用：真正的退出放后台做，
+// 避免在 wndProc 回调里阻塞（那会让 Windows 认为程序无响应）。
+func shutdownAsync() {
+	go shutdown()
 }
 
 // ---------------------------------------------------------------- 启动弹窗
@@ -584,7 +587,7 @@ func welcomeWndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 		case hit(btnMinimize, x, y):
 			minimizeToTray(hwnd)
 		case hit(btnExit, x, y):
-			shutdown()
+			shutdownAsync()
 		}
 		return 0
 	case wmClose:
