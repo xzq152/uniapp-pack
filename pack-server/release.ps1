@@ -129,7 +129,20 @@ $headers = @{
 
 $notesFile = Join-Path $root 'dist-notes.md'
 if (-not (Test-Path $notesFile)) { Fail "missing release notes: $notesFile" }
-$notes = (Get-Content $notesFile -Raw -Encoding UTF8) + "`n`nSHA256: " + $sha + "`n"
+
+# NOTE the trailing -join '':
+# In PowerShell 5.1, Get-Content -Raw returns an object whose GetType() says
+# String but which also carries a Count property. ConvertTo-Json treats it as a
+# collection and emits {"body": {"value": "...", "Count": 1}} - the payload
+# blows up from a few KB to several MB and the GitHub API rejects it.
+# -join '' forces a real String so serialization is correct.
+$notesText = ((Get-Content $notesFile -Raw -Encoding UTF8) -join '')
+$notes = $notesText + "`n`nSHA256: " + $sha + "`n"
+
+# Guard against the silent blow-up described above
+if ($notes.Length -gt 200000) {
+  Fail "release notes unexpectedly large ($($notes.Length) chars) - serialization problem?"
+}
 
 $rel = $null
 try {
@@ -143,6 +156,11 @@ try {
     draft      = $false
     prerelease = $false
   } | ConvertTo-Json -Depth 5
+
+  # Double-check the serialized result: body must be a string, not an object
+  if ($payload -match '"body":\s*\{\s*"value"') {
+    Fail "release body got serialized as an object - PowerShell JSON quirk, check the -join fix"
+  }
 
   $rel = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases" -Headers $headers -Method Post -Body $payload -ContentType 'application/json'
   Ok "created Release: $($rel.html_url)"
