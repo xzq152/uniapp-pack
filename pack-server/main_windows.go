@@ -158,12 +158,20 @@ func quitRunningInstances() {
 		}
 	}
 
-	// 兜底：按进程名强杀（taskkill 不会杀掉自己）
+	// 兜底：按进程名强杀。
+	// 注意要排除自己：--quit 这个实例本身也叫 uniapp-pack.exe，
+	// 直接 taskkill /IM 会把自己也杀掉，命令就永远等不到正常返回了。
+	// 用 /FI "PID ne <自己>" 把它排除掉。
 	root := os.Getenv("SystemRoot")
 	if root == "" {
 		root = `C:\Windows`
 	}
-	cmd := exec.Command(filepath.Join(root, "System32", "taskkill.exe"), "/F", "/IM", "uniapp-pack.exe")
+	filter := fmt.Sprintf("PID ne %d", os.Getpid())
+	cmd := exec.Command(filepath.Join(root, "System32", "taskkill.exe"),
+		"/F", "/IM", "uniapp-pack.exe", "/FI", filter)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: createNoWindow}
-	_ = cmd.Run()
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		debugLog(fmt.Sprintf("taskkill failed: %v (output: %s)", err, strings.TrimSpace(string(out))))
+	}
 }
