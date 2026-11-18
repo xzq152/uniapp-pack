@@ -61,6 +61,7 @@ var (
 	pLoadImageW       = user32.NewProc("LoadImageW")
 	pGetSystemMetrics = user32.NewProc("GetSystemMetrics")
 	pPostMessageW     = user32.NewProc("PostMessageW")
+	pDestroyMenu      = user32.NewProc("DestroyMenu")
 	pFindWindowW      = user32.NewProc("FindWindowW")
 	pIsWindow          = user32.NewProc("IsWindow")
 )
@@ -76,6 +77,7 @@ const (
 	wmDestroy    = 0x0002
 	wmClose      = 0x0010
 	wmPaint      = 0x000F
+	wmNull       = 0x0000 // 空消息：TrackPopupMenu 收尾用
 	wmEraseBg    = 0x0014
 	wmLButtonUp  = 0x0202
 
@@ -395,6 +397,7 @@ func trayWndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 
 func showTrayMenu(hwnd uintptr) {
 	hMenu, _, _ := pCreatePopupMenu.Call()
+	defer pDestroyMenu.Call(hMenu)
 
 	status := "状态：服务运行中 · 端口 " + port
 	pAppendMenuW.Call(hMenu, mfString|0x00000001, 0,
@@ -408,11 +411,23 @@ func showTrayMenu(hwnd uintptr) {
 
 	var pt point
 	pGetCursorPos.Call(uintptr(unsafe.Pointer(&pt)))
+	// 必须先抢前台，否则菜单在别的窗口处于激活状态时弹不出来，
+	// 或者弹出来但点了没反应。
 	pSetForegroundWin.Call(hwnd)
 
+	// TrackPopupMenu 是**模态阻塞**的：它会一直跑到用户选中或取消为止。
+	// 如果中途出了岔子（用户点了别处、窗口被禁用等）它不返回，
+	// 消息循环就永久卡死——进程还在、图标还在，但什么都不响应，
+	// 连「退出」都点不动。用户反馈的「退不掉」就是这样来的。
+	//
+	// 这里用返回值兜底：只有当它正常返回了某个命令号才执行动作；
+	// 返回 0 表示用户取消，什么都不做（不是错误）。
 	cmd, _, _ := pTrackPopupMenu.Call(hMenu,
-		tpmRightButton|tpmReturnCmd|0x0080,
+		tpmRightButton|tpmReturnCmd|0x0080, // TPM_NONOTIFY：不往队列塞菜单消息
 		uintptr(pt.x), uintptr(pt.y), 0, hwnd, 0)
+
+	// 文档要求：TrackPopupMenu 返回后补发一条空消息，否则菜单状态可能没收干净
+	pPostMessageW.Call(hwnd, wmNull, 0, 0)
 
 	switch cmd {
 	case 1:
@@ -439,33 +454,37 @@ func openOutputDir() {
 
 // shutdown 停服务并退出托盘。
 //
-// 注意执行时机：这个函数在 wndProc 回调里被调用，而 wndProc 跑在消息循环线程上。
-// 如果在这里同步 server.Shutdown（最多等 3 秒），消息循环就被卡住，
-// 后续的 DestroyWindow / PostQuitMessage 也就迟迟不执行，表现为「点了退出没反应」。
-// 所以先立刻拆窗口、让消息循环尽快退出，服务停止放到后台并给一个短超时。
+// 这是用户点「退出」时唯一应该走的路。三条设计要点，都是为了「一定能退掉」：
+//
+//  1. 先删托盘图标。否则窗口销毁后图标可能残留在任务栏（用户就会觉得程序没退）。
+//  2. 停服务放到后台 goroutine 里做，并给硬超时。绝不能在这个线程里同步等——
+//     它跑在消息循环上，一卡住连 DestroyWindow 都执行不到，表现就是"点了没反应"。
+//  3. 最终用 os.Exit 兜底，而不是只靠消息循环自然结束。消息循环能否退出取决于
+//     窗口销毁是否成功、PostQuitMessage 是否送达，任何一环出岔子进程就留着不走。
+//     os.Exit 是确定性的：只要走到这行，进程必定结束。
 func shutdown() {
 	debugLog("shutdown requested")
 
+	// 1) 先把托盘图标摘掉（销毁窗口前做，图标才不会被遗留）
 	if hWndTray != 0 {
-		debugLog("destroying tray window")
-		pDestroyWindow.Call(hWndTray) // 会同步触发 wmDestroy → PostQuitMessage
+		if n := trayData(nifTip, "", ""); n != nil {
+			pShellNotifyIconW.Call(nimDelete, uintptr(unsafe.Pointer(n)))
+		}
 	}
-	pPostQuitMessage.Call(0) // 双保险：即使上一步没走通也能退出
 
-	if server != nil {
-		srv := server
-		go func() {
+	// 2) 停 HTTP 服务（后台 + 超时），然后无条件退出进程
+	srv := server
+	go func() {
+		if srv != nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			defer cancel()
 			_ = srv.Shutdown(ctx)
+			cancel()
 			debugLog("http server shut down")
-			// 给日志和连接收尾一点时间再强制退出，避免用户看到"已退出"但仍占着端口
-			time.Sleep(200 * time.Millisecond)
-			os.Exit(0)
-		}()
-	} else {
+		}
+		debugLog("exiting process")
+		// 3) 确定性退出：不依赖窗口销毁或消息循环的间接路径
 		os.Exit(0)
-	}
+	}()
 }
 
 // ---------------------------------------------------------------- 启动弹窗

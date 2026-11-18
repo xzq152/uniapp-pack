@@ -8,9 +8,13 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 	"unsafe"
@@ -22,6 +26,18 @@ func main() {
 		return
 	}
 	exeDir = filepath.Dir(exePath)
+
+	// 应急退出通道：uniapp-pack.exe --quit
+	// 用途：界面万一卡死（比如菜单模态阻塞）、托盘也点不动时，
+	// 用户还能用命令行把进程结束掉，不用去任务管理器翻。
+	// 它按进程名找自己人，不依赖消息循环，所以卡死时也有效。
+	for _, a := range os.Args[1:] {
+		switch strings.ToLower(strings.TrimSpace(a)) {
+		case "--quit", "/quit", "-quit":
+			quitRunningInstances()
+			return
+		}
+	}
 
 	// 单实例：命名互斥体。
 	// 特意不用「探测端口」来判断——端口被别的程序占用时会误判成
@@ -78,6 +94,12 @@ func main() {
 		if e == nil {
 			return
 		}
+		// 主动退出时 ListenAndServe 也会返回 http.ErrServerClosed，
+		// 这是正常关闭，不能当成崩溃——否则日志里会留一条误导性的"意外停止"。
+		if errors.Is(e, http.ErrServerClosed) {
+			debugLog("server closed (normal shutdown)")
+			return
+		}
 		debugLog("server stopped unexpectedly: " + e.Error())
 		if hWndTray != 0 {
 			pPostMessageW.Call(hWndTray, wmClose, 0, 0)
@@ -111,4 +133,37 @@ func runMessageLoop() {
 		pDispatchMessageW.Call(uintptr(unsafe.Pointer(&m)))
 	}
 	debugLog("message loop exited")
+}
+
+// quitRunningInstances 结束所有正在运行的 uniapp-pack.exe（含自己之外的那个）。
+//
+// 为什么需要它：正常情况下点「退出」或托盘菜单就能退。但如果界面卡死
+// （例如弹窗菜单处于模态阻塞、消息循环停止响应），用户既点不动菜单、
+// 又不想去任务管理器里翻进程。这时 `uniapp-pack.exe --quit` 能救场。
+//
+// 它不经过消息循环，直接按进程名杀，所以卡死状态下也有效。
+func quitRunningInstances() {
+	// 先优雅尝试：给正在运行的实例发 WM_CLOSE，让它自己走 shutdown（能停服务和清图标）
+	trayH, _, _ := pFindWindowW.Call(
+		uintptr(unsafe.Pointer(utf16Ptr("uniappPackTrayWnd"))),
+		uintptr(unsafe.Pointer(utf16Ptr(appTitle))))
+	if r, _, _ := pIsWindow.Call(trayH); r != 0 {
+		pPostMessageW.Call(trayH, wmClose, 0, 0)
+		// 等它自己退（正常情况 1 秒内）
+		for i := 0; i < 20; i++ {
+			time.Sleep(100 * time.Millisecond)
+			if r2, _, _ := pIsWindow.Call(trayH); r2 == 0 {
+				return
+			}
+		}
+	}
+
+	// 兜底：按进程名强杀（taskkill 不会杀掉自己）
+	root := os.Getenv("SystemRoot")
+	if root == "" {
+		root = `C:\Windows`
+	}
+	cmd := exec.Command(filepath.Join(root, "System32", "taskkill.exe"), "/F", "/IM", "uniapp-pack.exe")
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: createNoWindow}
+	_ = cmd.Run()
 }
