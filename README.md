@@ -3,6 +3,23 @@
 局域网内使用的 uni-app Android 打包服务：同事在浏览器里 **上传资源包 → 填包名/证书 → 看进度 → 打开产物文件夹**，
 不需要装 HBuilderX、不需要碰命令行。底层复用一份 Docker 打包镜像（DCloud 离线 SDK + Gradle）。
 
+> ## ⚠️ 先读这一点：`uniapp-pack.exe` 只是前端辅助工具
+>
+> 下载到的 `uniapp-pack.exe` **本身不具备打包能力**。它负责的是：
+>
+> - 提供一个网页界面（上传资源包、填参数、看进度）
+> - 把参数传给 Docker，并显示构建日志
+> - 构建完成后帮你打开产物文件夹
+>
+> **真正执行 Gradle 编译、产出 APK 的是 Docker 镜像 `uniapp-android-builder:latest`**
+> （见本仓库 `android-builder/`，约 3GB，内含 DCloud 离线 SDK、Android SDK、Gradle）。
+>
+> 所以：**只下载 exe 是打不了包的**，你还需要一台装了 Docker 的机器，并且已经构建好这个镜像。
+> 没有镜像时页面会提示「打包镜像缺失 / 打包镜像不存在」，不会开始构建。
+>
+> 为什么这么分：DCloud 离线 SDK 受其许可限制、体积又大（3GB+），不适合塞进 exe 一起分发；
+> 而把编译环境放在容器里，能保证每台机器打出来的包一致，也不需要在 Windows 上折腾 Android Studio。
+
 ---
 
 ## 一分钟了解架构
@@ -12,17 +29,16 @@
 │ 局域网电脑    │ ─────────────────► │  Go 服务 :8080          │ ──────────────────► │ uniapp-pack-runtime  │
 │ 浏览器       │ ◄───────────────── │  Vue3 + TDesign 前端     │ ◄────────────────── │ 容器（离线 SDK+Gradle）│
 └──────────────┘  SSE 进度 / 打开目录 └────────────────────────┘   产物 APK            └─────────────────────┘
-                                            │
-                                            └── 数据落盘：uploads / outputs / keystores / icons / splashes
+      ↑ 只是操作界面和调度                                ↑ exe 本体              ↑ 真正干活的地方
 ```
 
 三个组成部分：
 
-| 部分 | 位置 | 说明 |
-|---|---|---|
-| **Go 服务** | `pack-server/*.go` | 单文件二进制，前端静态资源用 `go:embed` 打进去；无第三方依赖 |
-| **前端** | `pack-server/web/` | Vue 3 + TDesign Vue Next + Vite，构建产物 `web/dist` 被嵌入 exe |
-| **打包镜像** | `android-builder/` | Dockerfile + entrypoint.sh，内含 DCloud 离线 SDK、Android SDK、Gradle |
+| 部分 | 位置 | 说明 | 能否省略 |
+|---|---|---|---|
+| **Go 服务** | `pack-server/*.go` | 单文件二进制，前端静态资源用 `go:embed` 打进去；无第三方依赖 | 可选（也可纯命令行打包） |
+| **前端** | `pack-server/web/` | Vue 3 + TDesign Vue Next + Vite，构建产物 `web/dist` 被嵌入 exe | 已嵌入 exe |
+| **打包镜像** | `android-builder/` | Dockerfile + entrypoint.sh，内含 DCloud 离线 SDK、Android SDK、Gradle | **必需，没有它打不了包** |
 
 ---
 
@@ -30,6 +46,16 @@
 
 从 [Releases](https://github.com/xzq152/uniapp-pack/releases) 下载 `uniapp-pack.exe`，双击即用。
 **不需要安装 Go / Node，也不用自己构建**——服务端和托盘都在这一个 exe 里。
+
+> **但 exe 只是操作界面**，打包能力来自 Docker 镜像。用之前请确认下面两件事，否则页面只会提示
+> 「打包镜像缺失」而不会开始构建：
+>
+> 1. 有一台装了 Docker 的机器（本机或局域网内另一台都行）
+> 2. 那台机器上已经有镜像 `uniapp-android-builder:latest`
+>    （构建方法见 [`android-builder/README.md`](android-builder/README.md)，约 3GB，首次较慢）
+>
+> Windows 的本机 Docker 走命名管道、本程序只支持 unix socket / TCP，所以通常做法是：
+> 把镜像装在一台 Linux / 局域网机器上，然后在页面里填它的 `tcp://IP:2375`。
 
 首次启动会弹出窗口显示本机与局域网地址，可一键打开页面。服务常驻右下角托盘：
 双击图标打开页面，右键菜单可退出。**同时只会运行一个实例**（用命名互斥体判断，不靠端口）。
@@ -48,10 +74,6 @@ output/     ← APK 产物
 cache/      ← 可再生缓存，删了不影响配置
 data/       ← 证书、任务记录等长期数据
 ```
-
-> 前置条件：需要一台装了 Docker 的机器，并且已有打包镜像 `uniapp-android-builder:latest`。
-> Windows 的本机 Docker 走命名管道、本程序只支持 unix socket / TCP，所以请把镜像装在
-> 一台 Linux / 局域网机器上，然后在页面里填它的 `tcp://IP:2375`。
 
 打开 <http://127.0.0.1:8080>。**页面第一屏是「绑定打包镜像环境」**：选本机或远程 Docker → 点「绑定并启动」，
 确认环境运行中后，上传与打包表单才会出现。打完后点完成区的「打开文件夹」，直接在本机文件管理器
