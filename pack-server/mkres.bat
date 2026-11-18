@@ -37,7 +37,7 @@ echo [*] 生成 exe 图标与版本资源...
 "%WINRES%" simply ^
   --arch amd64 ^
   --out rsrc ^
-  --manifest gui ^
+  --manifest cli ^
   --icon assets\app.ico ^
   --file-description "uni-app Android packaging service" ^
   --product-name "uniapp-pack" ^
