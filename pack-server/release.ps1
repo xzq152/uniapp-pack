@@ -181,6 +181,19 @@ try {
   Ok "created Release: $($rel.html_url)"
 }
 
+# Ensure the Release is actually published.
+# A draft Release is invisible on the public releases page, and worse: deleting
+# and re-creating the tag can leave orphaned drafts behind. Check explicitly.
+if ($rel.draft) {
+  Write-Host "  Release is a draft, publishing it..."
+  $pubHash = @{ draft = $false; prerelease = $false }
+  $pubJson = $pubHash | ConvertTo-Json
+  $pubBytes = [System.Text.Encoding]::UTF8.GetBytes($pubJson)
+  $rel = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/$($rel.id)" -Headers $headers -Method Patch -Body $pubBytes -ContentType 'application/json; charset=utf-8'
+  if ($rel.draft) { Fail "Release is still a draft after publish attempt" }
+  Ok "published Release (was draft)"
+}
+
 # remove same-name old asset to avoid duplicates
 foreach ($asset in $rel.assets) {
   if ($asset.name -eq 'uniapp-pack.exe') {
